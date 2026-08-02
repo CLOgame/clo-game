@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — C-LO Champs</title>
+<meta name="description" content="Privacy Policy for C-LO Champs, the street dice game.">
+<style>
+  :root{
+    --ink:#0e1626;          /* near-black navy, body text */
+    --paper:#f5f7fb;        /* cool off-white page */
+    --card:#ffffff;
+    --blue:#1e56d6;         /* brand blue (matches app theme) */
+    --blue-deep:#123a99;
+    --red:#d63636;          /* brand red (dice) */
+    --gold:#d4a843;         /* brand gold (UI accents) */
+    --muted:#5b6577;
+    --line:#dfe4ee;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'Segoe UI',system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ── Header: a compact brand band, not a marketing hero ── */
+  header{
+    background:
+      radial-gradient(120% 140% at 50% -20%, #5cb0ff 0%, var(--blue) 45%, var(--blue-deep) 100%);
+    color:#fff;
+    padding:44px 24px 40px;
+    text-align:center;
+    position:relative;
+    overflow:hidden;
+  }
+  /* faint radiating rays echoing the splash, kept very subtle */
+  header::before{
+    content:"";
+    position:absolute; inset:-40% -10% auto -10%; height:200%;
+    background:
+      repeating-conic-gradient(from 0deg at 50% 0%,
+        rgba(255,255,255,.06) 0deg 3deg, transparent 3deg 9deg);
+    pointer-events:none;
+  }
+  .die{
+    width:52px;height:52px;border-radius:13px;
+    background:linear-gradient(160deg,#f04a4a,#b21c1c);
+    display:inline-grid; grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(3,1fr);
+    padding:9px; gap:2px; box-shadow:0 6px 18px rgba(0,0,0,.35);
+    position:relative; z-index:1; margin-bottom:16px;
+  }
+  .die span{background:#fff;border-radius:50%;align-self:center;justify-self:center;width:9px;height:9px;}
+  /* Face-5: pips at the four corners + center (grid cells 1,3,5,7,9).
+     Hide the four edge-midpoint cells (2,4,6,8). */
+  .die span:nth-child(2),
+  .die span:nth-child(4),
+  .die span:nth-child(6),
+  .die span:nth-child(8){visibility:hidden;}
+  h1{
+    margin:0; font-size:1.7rem; font-weight:800; letter-spacing:.01em;
+    position:relative; z-index:1;
+  }
+  header .sub{
+    margin:8px 0 0; opacity:.9; font-size:.95rem; position:relative; z-index:1;
+  }
+
+  /* ── Content card ── */
+  main{
+    max-width:760px; margin:-22px auto 60px; padding:0 20px;
+  }
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:16px;
+    padding:32px 30px; box-shadow:0 10px 40px rgba(20,40,90,.07);
+  }
+
+  .updated{
+    display:inline-block; font-size:.8rem; color:var(--blue-deep);
+    background:#eaf0ff; border:1px solid #d3e0ff; border-radius:999px;
+    padding:4px 12px; margin-bottom:8px; font-weight:600;
+  }
+
+  /* The key disclosure, boxed like the in-app one so they visibly match */
+  .callout{
+    border:1px solid var(--gold); background:#fbf6e8; border-radius:12px;
+    padding:16px 18px; margin:22px 0; font-weight:600; color:#5a4a1a;
+  }
+
+  h2{
+    font-size:1.15rem; margin:34px 0 6px; color:var(--blue-deep);
+    display:flex; align-items:baseline; gap:10px;
+  }
+  h2 .n{
+    font-size:.78rem; font-weight:800; color:var(--red);
+    border:1.5px solid var(--red); border-radius:6px; padding:1px 7px; line-height:1.4;
+    flex:0 0 auto;
+  }
+  h3{font-size:1rem; margin:20px 0 4px; color:var(--ink);}
+  p{margin:8px 0;}
+  ul{margin:8px 0 8px; padding-left:22px;}
+  li{margin:5px 0;}
+  a{color:var(--blue); text-decoration:none; border-bottom:1px solid #b9ccf5;}
+  a:hover{border-bottom-color:var(--blue);}
+  strong{color:var(--ink);}
+
+  .placeholder{
+    background:#fff3f3; border:1px dashed var(--red); border-radius:6px;
+    padding:1px 6px; font-size:.9em; color:#a12; font-weight:600;
+  }
+
+  hr{border:none; border-top:1px solid var(--line); margin:30px 0;}
+
+  footer{
+    text-align:center; color:var(--muted); font-size:.82rem;
+    padding:0 20px 50px; max-width:760px; margin:0 auto;
+  }
+
+  @media (max-width:600px){
+    .card{padding:24px 18px;}
+    h1{font-size:1.4rem;}
+  }
+  @media (prefers-reduced-motion:reduce){
+    html{scroll-behavior:auto;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="die" aria-hidden="true">
+    <span></span><span></span><span></span>
+    <span></span><span></span><span></span>
+    <span></span><span></span><span></span>
+  </div>
+  <h1>Privacy Policy</h1>
+  <p class="sub">C-LO Champs — street dice game</p>
+</header>
+
+<main>
+  <div class="card">
+
+    <span class="updated">Last updated: August 2, 2026</span>
+
+    <p>This Privacy Policy explains how C-LO Champs (“we,” “us,” or the “app”)
+    handles information when you play. C-LO Champs is a free dice game for
+    entertainment only. We’ve tried to keep this plain and honest — if anything
+    is unclear, contact us using the details at the bottom.</p>
+
+    <div class="callout">
+      C-LO Champs is for entertainment only. Chips are virtual, have no cash
+      value, and can never be exchanged for real money or prizes. The game does
+      not offer real-money gambling. You must be 18 or older to play.
+    </div>
+
+    <h2><span class="n">1</span> Information we collect</h2>
+
+    <h3>Account &amp; profile information</h3>
+    <p>When you play, we create a player profile so your progress is saved. This
+    can include:</p>
+    <ul>
+      <li>A player name and avatar you choose</li>
+      <li>An anonymous account identifier automatically assigned to your device</li>
+      <li>Optional Google account information, only if you choose to link a Google
+      account (used to sign in and recover your profile)</li>
+      <li>In-game data such as your chip balance, rank, game statistics, and
+      referral activity</li>
+    </ul>
+
+    <h3>Purchase information</h3>
+    <p>If you buy virtual chips or items, the purchase is processed by
+    <strong>Google Play</strong>. We do <strong>not</strong> collect or store
+    your payment card details — that information is handled by Google under its
+    own privacy policy. We may receive a confirmation that a purchase was made so
+    we can deliver the virtual items to your account.</p>
+
+    <h3>Advertising information</h3>
+    <p>C-LO Champs may show optional ads (for example, watch-an-ad-for-chips
+    rewards). To do this, our advertising partners — such as Google AdMob — may
+    collect device and advertising identifiers and similar technical data to
+    show and measure ads. You can reset or limit your advertising ID in your
+    device settings. See Google’s policies for details on how this data is used.</p>
+
+    <h3>Technical &amp; usage information</h3>
+    <p>Like most apps, we and our service providers may automatically receive
+    basic technical information such as device type, operating system, app
+    version, and general app-performance and crash data. This helps us keep the
+    game working and improve it.</p>
+
+    <p><strong>What we do not collect:</strong> we do not collect your precise
+    location, your contacts, your photos, or other personal content from your
+    device.</p>
+
+    <h2><span class="n">2</span> How we use information</h2>
+    <ul>
+      <li>To create and save your player profile and game progress</li>
+      <li>To run core features — dice games, rooms, leaderboards, rewards, and referrals</li>
+      <li>To deliver virtual items you’ve purchased or earned</li>
+      <li>To show and measure ads (if you engage with them)</li>
+      <li>To keep the game secure, prevent fraud and abuse, and fix problems</li>
+      <li>To understand how the game is used so we can improve it</li>
+    </ul>
+
+    <h2><span class="n">3</span> How information is shared</h2>
+    <p>We do not sell your personal information. We share information only with:</p>
+    <ul>
+      <li><strong>Service providers</strong> that run the app’s infrastructure —
+      for example Google Firebase (authentication and data storage), Google Play
+      (purchases), and advertising partners such as Google AdMob. They process
+      data on our behalf under their own terms.</li>
+      <li><strong>Other players, in limited ways</strong> — your chosen player
+      name, avatar, and rank may be visible to others through features like
+      multiplayer tables and leaderboards. Do not use a name that reveals
+      personal information you don’t want shared.</li>
+      <li><strong>Legal reasons</strong> — if required by law, or to protect the
+      rights, safety, and security of players, the public, or the app.</li>
+    </ul>
+
+    <h2><span class="n">4</span> Data storage &amp; security</h2>
+    <p>Your game data is stored using Google Firebase services. We rely on
+    industry-standard safeguards provided by these platforms to protect your
+    information. No method of storage or transmission is completely secure, but
+    we take reasonable steps to protect your data.</p>
+
+    <h2><span class="n">5</span> Age requirement (18+)</h2>
+    <p>C-LO Champs is intended only for adults aged <strong>18 or older</strong>,
+    because it features simulated gambling themes. We do not knowingly collect
+    information from anyone under 18. If you believe someone under 18 has provided
+    us information, contact us and we will remove it.</p>
+
+    <h2><span class="n">6</span> Your choices &amp; rights</h2>
+    <ul>
+      <li><strong>Advertising:</strong> reset or limit your advertising ID in your
+      device settings to control ad personalization.</li>
+      <li><strong>Google account:</strong> linking a Google account is optional;
+      you can play with an anonymous profile instead.</li>
+      <li><strong>Access or deletion:</strong> you can request access to, or
+      deletion of, your profile data by contacting us at the email below.
+      Depending on where you live, you may have additional rights under laws such
+      as the GDPR or CCPA; we honor applicable requests.</li>
+    </ul>
+
+    <h2><span class="n">7</span> Changes to this policy</h2>
+    <p>We may update this Privacy Policy from time to time. When we do, we’ll
+    revise the “Last updated” date at the top. Significant changes may also be
+    noted in the app. Continuing to play after an update means you accept the
+    revised policy.</p>
+
+    <h2><span class="n">8</span> Contact us</h2>
+    <p>If you have questions about this Privacy Policy or your information, reach
+    us at:</p>
+    <ul>
+      <li><strong>Email:</strong> <a href="mailto:clochamps@gmail.com">clochamps@gmail.com</a></li>
+    </ul>
+
+    <hr>
+    <p style="font-size:.85rem;color:var(--muted);">
+      C-LO Champs is a game of skill and chance for entertainment only. It is not
+      a gambling service, does not offer prizes of real-world value, and does not
+      provide any way to win or withdraw real money.
+    </p>
+
+  </div>
+</main>
+
+<footer>
+  © <span id="yr"></span> C-LO Champs. All rights reserved.
+</footer>
+
+<script>
+  document.getElementById('yr').textContent = new Date().getFullYear();
+</script>
+
+</body>
+</html>
