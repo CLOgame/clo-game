@@ -1018,6 +1018,9 @@ html,body{
   touch-action:pan-x;
 }
 .room-carousel::-webkit-scrollbar{display:none;}
+/* Own compositor layer per card: transform/opacity then animate on the GPU
+   instead of repainting the card (and its 40px glow) every frame. */
+.room-carousel > *{will-change:transform,opacity;}
 /* End spacer. Chrome omits a flex scroll container's trailing padding from
    scrollWidth, so padding-right could never let the last room centre (the
    first one worked because leading padding IS honoured). A real flex item
@@ -10962,39 +10965,63 @@ function buildCarousel(){
   carousel._isDragMove=()=>dragMoved;
 }
 
-function onCarouselScrollImmediate(carousel){
-  const center = carousel.scrollLeft + carousel.clientWidth / 2;
-  // LIVE TABLES card (not a room) — give it the same scale/opacity/active feel
-  const live = document.getElementById('rc-live-tables');
-  if(live){
-    const lc = live.offsetLeft + live.offsetWidth/2;
-    const ld = Math.abs(center - lc);
-    const maxDist = 280;
-    live.style.transform = `scale(${Math.max(0.75, 1-(ld/maxDist)*0.25)})`;
-    live.style.opacity = Math.max(0.4, 1-(ld/maxDist)*0.6);
-    const lActive = ld < 100;
-    live.classList.toggle('active', lActive);
-    live.style.boxShadow = lActive ? '0 0 0 2px rgba(231,76,60,.6),0 0 40px rgba(231,76,60,.45),0 10px 40px rgba(0,0,0,.6)' : '';
-  }
+// Rewritten to stop layout thrashing. The old version interleaved reads
+// (offsetLeft/offsetWidth) with writes (transform/opacity/boxShadow) across
+// all 13 cards, forcing a synchronous reflow per card per scroll event —
+// which stalled the fling mid-scroll. Now: geometry is cached (cards do not
+// move while scrolling), all reads happen before any write, and the whole
+// pass is throttled to one run per animation frame.
+let _carGeom=null, _carGeomWidth=0, _carRafPending=false;
+function _invalidateCarouselGeom(){_carGeom=null;}
+window.addEventListener('resize',_invalidateCarouselGeom);
+window.addEventListener('orientationchange',_invalidateCarouselGeom);
+
+function _measureCarouselGeom(carousel){
+  // Single read pass. Card offsets are stable until layout changes, so this
+  // runs once per resize rather than once per scroll event.
+  const items=[];
+  const live=document.getElementById('rc-live-tables');
+  if(live)items.push({el:live,room:null,mid:live.offsetLeft+live.offsetWidth/2});
   ROOMS.forEach(room=>{
-    const card = document.getElementById('rc-'+room.id);
-    if(!card) return;
-    const cardCenter = card.offsetLeft + card.offsetWidth / 2;
-    const dist = Math.abs(center - cardCenter);
-    const maxDist = 280;
-    const scale = Math.max(0.75, 1 - (dist/maxDist) * 0.25);
-    const opacity = Math.max(0.4, 1 - (dist/maxDist) * 0.6);
-    const isActive = dist < 100;
-    card.style.transform = `scale(${scale})`;
-    card.style.opacity = opacity;
-    card.classList.toggle('active', isActive);
-    if(isActive){
-      const theme = ROOM_THEMES[room.id] || ROOM_THEMES.alley;
-      card.style.boxShadow = `0 0 0 2px ${theme.accent}88, 0 0 40px ${theme.glow}, 0 10px 40px rgba(0,0,0,.6)`;
-    } else {
-      card.style.boxShadow = '';
-    }
+    const el=document.getElementById('rc-'+room.id);
+    if(el)items.push({el:el,room:room,mid:el.offsetLeft+el.offsetWidth/2});
   });
+  _carGeom=items;
+  _carGeomWidth=carousel.clientWidth;
+  return items;
+}
+
+function _paintCarousel(carousel){
+  const geom=(_carGeom&&_carGeomWidth===carousel.clientWidth)
+    ? _carGeom : _measureCarouselGeom(carousel);
+  const center=carousel.scrollLeft+carousel.clientWidth/2;
+  const maxDist=280;
+  // Write pass only — no geometry reads past this point.
+  for(let i=0;i<geom.length;i++){
+    const g=geom[i];
+    const dist=Math.abs(center-g.mid);
+    const isActive=dist<100;
+    g.el.style.transform='scale('+Math.max(0.75,1-(dist/maxDist)*0.25)+')';
+    g.el.style.opacity=Math.max(0.4,1-(dist/maxDist)*0.6);
+    if(g.el.classList.contains('active')!==isActive)
+      g.el.classList.toggle('active',isActive);
+    if(isActive){
+      if(g.room){
+        const theme=ROOM_THEMES[g.room.id]||ROOM_THEMES.alley;
+        g.el.style.boxShadow='0 0 0 2px '+theme.accent+'88, 0 0 40px '+theme.glow+', 0 10px 40px rgba(0,0,0,.6)';
+      }else{
+        g.el.style.boxShadow='0 0 0 2px rgba(231,76,60,.6),0 0 40px rgba(231,76,60,.45),0 10px 40px rgba(0,0,0,.6)';
+      }
+    }else if(g.el.style.boxShadow){
+      g.el.style.boxShadow='';
+    }
+  }
+}
+
+function onCarouselScrollImmediate(carousel){
+  if(_carRafPending)return;
+  _carRafPending=true;
+  requestAnimationFrame(()=>{_carRafPending=false;_paintCarousel(carousel);});
 }
 
 function playCarouselTick(){
