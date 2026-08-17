@@ -1,15 +1,1 @@
 
-[
-  {
-    "relation": [
-      "delegate_permission/common.handle_all_urls"
-    ],
-    "target": {
-      "namespace": "android_app",
-      "package_name": "com.clochamps.app",
-      "sha256_cert_fingerprints": [
-        "0A:DD:C8:A0:78:48:B8:B5:17:C0:C3:7A:0F:49:66:C4:6D:57:4F:B2:98:25:1E:AC:DF:0C:51:B1:F4:A8:09:04"
-      ]
-    }
-  }
-]
