@@ -12596,11 +12596,11 @@ function maybeOfferDoubleXP(onDone){
   };
   modal.innerHTML=
     '<div style="max-width:380px;width:100%;background:linear-gradient(160deg,#12294a,#0a1626);border:1px solid #d4a843;border-radius:18px;padding:26px 24px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.6);">'
-    +'<div style="font-size:2.4rem;line-height:1;margin-bottom:6px;">\\u2b50</div>'
+    +'<div style="font-size:2.4rem;line-height:1;margin-bottom:6px;">\u2b50</div>'
     +'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:1.6rem;letter-spacing:.04em;color:#ffd76b;">DOUBLE YOUR XP</div>'
     +'<div style="color:#eae6dc;font-size:1rem;margin:8px 0 4px;">You earned <b style="color:#8ef0a8;">'+earned.toLocaleString()+' XP</b> this session.</div>'
     +'<div style="color:#b9c2d0;font-size:.9rem;margin-bottom:20px;">Watch a short video to earn <b style="color:#8ef0a8;">+'+earned.toLocaleString()+' XP</b> more.</div>'
-    +'<button id="xp2x-watch" style="width:100%;padding:14px;margin-bottom:10px;background:linear-gradient(135deg,#3edc85,#1a8040);color:#052012;border:none;border-radius:12px;font-family:\'Bebas Neue\',sans-serif;font-size:1.15rem;letter-spacing:.06em;cursor:pointer;box-shadow:0 4px 0 #0a4a20;">\\u25b6\\ufe0f WATCH \\u2014 2X MY XP</button>'
+    +'<button id="xp2x-watch" style="width:100%;padding:14px;margin-bottom:10px;background:linear-gradient(135deg,#3edc85,#1a8040);color:#052012;border:none;border-radius:12px;font-family:\'Bebas Neue\',sans-serif;font-size:1.15rem;letter-spacing:.06em;cursor:pointer;box-shadow:0 4px 0 #0a4a20;">\u25b6\ufe0f WATCH \u2014 2X MY XP</button>'
     +'<button id="xp2x-skip" style="width:100%;padding:11px;background:transparent;color:#8794a8;border:1px solid #2a3a54;border-radius:12px;font-size:.95rem;cursor:pointer;">No thanks</button>'
     +'</div>';
   modal.style.display='flex';
@@ -12609,10 +12609,10 @@ function maybeOfferDoubleXP(onDone){
     // Simulated rewarded video for now (same placeholder path as the game's
     // other watch-ad flows; real AdMob rewarded ad plugs in at launch).
     // On completion, grant an equal amount of XP again = 2x the session batch.
-    const btn=this; btn.disabled=true; btn.textContent='\\u25b6\\ufe0f Playing ad\\u2026';
+    const btn=this; btn.disabled=true; btn.textContent='\u25b6\ufe0f Playing ad\u2026';
     setTimeout(function(){
       awardXP(earned);                     // grant the doubled batch
-      showToast('\\u2b50 +'+earned.toLocaleString()+' BONUS XP!');
+      showToast('\u2b50 +'+earned.toLocaleString()+' BONUS XP!');
       if(typeof soundWin==='function'){try{soundWin();}catch(_){}}
       close(true);
     },900);
@@ -12642,7 +12642,7 @@ function buildCombinedShareText(){
   if(parts.length===1)list=parts[0];
   else if(parts.length===2)list=parts[0]+' and '+parts[1];
   else list=parts.slice(0,-1).join(', ')+' and '+parts[parts.length-1];
-  return 'Been running it on C-LO Champs \\ud83c\\udfb2\\ud83d\\udd25 Hit my '+list+' this session! #CLOChamps';
+  return 'Been running it on C-LO Champs \ud83c\udfb2\ud83d\udd25 Hit my '+list+' this session! #CLOChamps';
 }
 
 // Called on table exit (bust-out or walk-away). If anything's queued, shows a
@@ -12656,9 +12656,9 @@ function flushPendingShares(){
   _pendingShares=[]; // clear now so it never double-fires
   try{
     promptGenericShare({
-      emoji:'\\ud83c\\udfb2',
+      emoji:'\ud83c\udfb2',
       title:'Nice session!',
-      sub:'You hit some heat out there \\u2014 flex it on your crew?',
+      sub:'You hit some heat out there \u2014 flex it on your crew?',
       highlight:headline,
       text:text
     });
