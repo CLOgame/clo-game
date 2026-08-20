@@ -47,6 +47,11 @@
      Safari's "Add to Home Screen"). Same gold 5-pip die on dark blue. -->
 <link rel="apple-touch-icon" href="/icon-192.png">
 
+<!-- Favicon. Without this every browser silently requests /favicon.ico and
+     logs a 404 in the console — the long-standing "stray 404" on this page.
+     Pointing it at the existing icon PNG costs nothing and clears the noise. -->
+<link rel="icon" type="image/png" href="/icon-192.png">
+
 <title>C-LO Champs</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -7933,39 +7938,75 @@ function mpBlockReason(){
   return 'ok';
 }
 
-function goToPrivateRoom(){
-  // Multiplayer requires a live connection to sync players.
-  if(!mpConnectionReady()){
-    // If we're online but just missing a UID, try to recover sign-in silently.
-    if(navigator.onLine!==false && _auth && !_uid){
-      mpTryRecoverAuth();
-      showToast('Reconnecting… try again in a moment 📶');
-      return;
-    }
+// Waits up to `ms` for auth + RTDB to become ready, instead of bouncing the
+// player with a "try again" toast. The old behaviour lost the very first
+// multiplayer tap on any slow connection, because signInAnonymously() had not
+// returned yet — by the time the toast was read, _uid usually existed.
+function mpAwaitAuth(ms=4000){
+  return new Promise(resolve=>{
+    if(_uid&&_rtdb)return resolve(true);        // already good
+    if(navigator.onLine===false)return resolve(false);
+    mpTryRecoverAuth();                          // nudge sign-in along
+    let done=false;
+    const finish=v=>{
+      if(done)return;
+      done=true;clearInterval(iv);clearTimeout(to);
+      resolve(v);
+    };
+    const iv=setInterval(()=>{ if(_uid&&_rtdb)finish(true); },100);
+    const to=setTimeout(()=>finish(!!(_uid&&_rtdb)),ms);
+  });
+}
+
+// Hides the toast early — used when we showed "Connecting…" but auth landed
+// before the timeout, so the message doesn't linger over the next screen.
+function mpHideToast(){
+  const t=document.getElementById('toast');
+  if(t)t.classList.remove('show');
+  clearTimeout(window._tt);
+}
+
+let _mpEntering=false;   // guards against stacked taps while we wait
+
+// Single entry point for every multiplayer doorway. Runs `onReady` as soon as
+// the connection is usable, waiting quietly if it isn't yet.
+async function mpEnter(onReady){
+  if(mpConnectionReady()){ onReady(); return; }
+  if(navigator.onLine===false){
     showToast('Multiplayer needs an internet connection 📶');
     return;
   }
-  prShowView('choice');
-  document.getElementById('pr-title').textContent='Private Table';
-  showScreen('privroom');
-  prSweepStaleRooms();
+  if(_mpEntering)return;                         // already waiting on a tap
+  _mpEntering=true;
+  // Only surface a message if the wait is actually perceptible.
+  const slow=setTimeout(()=>showToast('Connecting…',4000),500);
+  let ok=false;
+  try{ ok=await mpAwaitAuth(4000); }
+  finally{
+    clearTimeout(slow);
+    _mpEntering=false;
+  }
+  if(ok){ mpHideToast(); onReady(); return; }
+  showToast('Multiplayer needs an internet connection 📶');
+}
+
+function goToPrivateRoom(){
+  mpEnter(()=>{
+    prShowView('choice');
+    document.getElementById('pr-title').textContent='Private Table';
+    showScreen('privroom');
+    prSweepStaleRooms();
+  });
 }
 
 // From the LIVE TABLES empty state — jump straight to the Host setup so the
 // player can create the first public table (turns dead air into content).
 function goHostFromEmpty(){
-  if(!mpConnectionReady()){
-    if(navigator.onLine!==false && _auth && !_uid){
-      mpTryRecoverAuth();
-      showToast('Reconnecting… try again in a moment 📶');
-      return;
-    }
-    showToast('Multiplayer needs an internet connection 📶');
-    return;
-  }
-  showScreen('privroom');
-  prShowHostSetup();
-  prSweepStaleRooms();
+  mpEnter(()=>{
+    showScreen('privroom');
+    prShowHostSetup();
+    prSweepStaleRooms();
+  });
 }
 
 // Best-effort: if we're online but somehow have no signed-in user, re-attempt
@@ -9435,11 +9476,24 @@ function mpRenderShooterArea(round,state){
   mpThrowShooterDice(state.dice,0.7,()=>{
     const who=isMe?'YOU':nm.toUpperCase();
     const hand=(state.hand||'').toUpperCase();
+    // Once settlement has landed, fold MY OWN money delta into this same line.
+    // The log strip below used to repeat my outcome as a separate "-$1,000"
+    // entry, so two result lines stacked on top of each other for every hand.
+    // One line carries hand + outcome + money; the log keeps the OTHER seats.
+    let money='';
+    if(isMe){
+      const rd=_mpRoom&&_mpRoom.round;
+      const sum=(rd&&rd.settlementSummary)||null;
+      const mine=sum?sum[_mpMyUid]:null;
+      if(mine&&typeof mine.delta==='number'&&mine.delta!==0){
+        money=(mine.delta>0?'  +$':'  -$')+Math.abs(mine.delta).toLocaleString();
+      }
+    }
     let txt='',cls='';
-    if(state.resultType==='win'){txt=`${who}: ${hand} — WIN`;cls='win';}
-    else if(state.resultType==='lose'){txt=`${who}: ${hand} — LOSE`;cls='lose';}
+    if(state.resultType==='win'){txt=`${who}: ${hand} — WIN${money}`;cls='win';}
+    else if(state.resultType==='lose'){txt=`${who}: ${hand} — LOSE${money}`;cls='lose';}
     else if(state.resultType==='push'){txt=`${who}: ${hand} — PUSH`;cls='push';}
-    else{txt=`${who}: ${hand}`;}
+    else{txt=`${who}: ${hand}${money}`;}
     mpSetResult(txt,cls);
     // Sound only for MY OWN result, and exactly once (the guard prevents the
     // replay-on-every-sync bug). Keyed by round + my uid + dice so a genuinely
@@ -9703,6 +9757,9 @@ function mpRenderSettlementPhase(room,round){
     for(let i=0;i<PR_MAX_SEATS;i++){
       const s=seats[i];
       if(!s||!s.uid||s.uid===room.hostUid)continue;
+      // Skip myself — my own result already reads on the callout line above,
+      // money included. Listing it again here was the doubled-text bug.
+      if(s.uid===_mpMyUid)continue;
       const r=summary[s.uid];
       if(!r)continue;
       const nm=s.username||'P';
@@ -12596,11 +12653,11 @@ function maybeOfferDoubleXP(onDone){
   };
   modal.innerHTML=
     '<div style="max-width:380px;width:100%;background:linear-gradient(160deg,#12294a,#0a1626);border:1px solid #d4a843;border-radius:18px;padding:26px 24px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.6);">'
-    +'<div style="font-size:2.4rem;line-height:1;margin-bottom:6px;">\u2b50</div>'
+    +'<div style="font-size:2.4rem;line-height:1;margin-bottom:6px;">\\u2b50</div>'
     +'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:1.6rem;letter-spacing:.04em;color:#ffd76b;">DOUBLE YOUR XP</div>'
     +'<div style="color:#eae6dc;font-size:1rem;margin:8px 0 4px;">You earned <b style="color:#8ef0a8;">'+earned.toLocaleString()+' XP</b> this session.</div>'
     +'<div style="color:#b9c2d0;font-size:.9rem;margin-bottom:20px;">Watch a short video to earn <b style="color:#8ef0a8;">+'+earned.toLocaleString()+' XP</b> more.</div>'
-    +'<button id="xp2x-watch" style="width:100%;padding:14px;margin-bottom:10px;background:linear-gradient(135deg,#3edc85,#1a8040);color:#052012;border:none;border-radius:12px;font-family:\'Bebas Neue\',sans-serif;font-size:1.15rem;letter-spacing:.06em;cursor:pointer;box-shadow:0 4px 0 #0a4a20;">\u25b6\ufe0f WATCH \u2014 2X MY XP</button>'
+    +'<button id="xp2x-watch" style="width:100%;padding:14px;margin-bottom:10px;background:linear-gradient(135deg,#3edc85,#1a8040);color:#052012;border:none;border-radius:12px;font-family:\'Bebas Neue\',sans-serif;font-size:1.15rem;letter-spacing:.06em;cursor:pointer;box-shadow:0 4px 0 #0a4a20;">\\u25b6\\ufe0f WATCH \\u2014 2X MY XP</button>'
     +'<button id="xp2x-skip" style="width:100%;padding:11px;background:transparent;color:#8794a8;border:1px solid #2a3a54;border-radius:12px;font-size:.95rem;cursor:pointer;">No thanks</button>'
     +'</div>';
   modal.style.display='flex';
@@ -12609,10 +12666,10 @@ function maybeOfferDoubleXP(onDone){
     // Simulated rewarded video for now (same placeholder path as the game's
     // other watch-ad flows; real AdMob rewarded ad plugs in at launch).
     // On completion, grant an equal amount of XP again = 2x the session batch.
-    const btn=this; btn.disabled=true; btn.textContent='\u25b6\ufe0f Playing ad\u2026';
+    const btn=this; btn.disabled=true; btn.textContent='\\u25b6\\ufe0f Playing ad\\u2026';
     setTimeout(function(){
       awardXP(earned);                     // grant the doubled batch
-      showToast('\u2b50 +'+earned.toLocaleString()+' BONUS XP!');
+      showToast('\\u2b50 +'+earned.toLocaleString()+' BONUS XP!');
       if(typeof soundWin==='function'){try{soundWin();}catch(_){}}
       close(true);
     },900);
@@ -12642,7 +12699,7 @@ function buildCombinedShareText(){
   if(parts.length===1)list=parts[0];
   else if(parts.length===2)list=parts[0]+' and '+parts[1];
   else list=parts.slice(0,-1).join(', ')+' and '+parts[parts.length-1];
-  return 'Been running it on C-LO Champs \ud83c\udfb2\ud83d\udd25 Hit my '+list+' this session! #CLOChamps';
+  return 'Been running it on C-LO Champs \\ud83c\\udfb2\\ud83d\\udd25 Hit my '+list+' this session! #CLOChamps';
 }
 
 // Called on table exit (bust-out or walk-away). If anything's queued, shows a
@@ -12656,9 +12713,9 @@ function flushPendingShares(){
   _pendingShares=[]; // clear now so it never double-fires
   try{
     promptGenericShare({
-      emoji:'\ud83c\udfb2',
+      emoji:'\\ud83c\\udfb2',
       title:'Nice session!',
-      sub:'You hit some heat out there \u2014 flex it on your crew?',
+      sub:'You hit some heat out there \\u2014 flex it on your crew?',
       highlight:headline,
       text:text
     });
