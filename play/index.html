@@ -6428,7 +6428,8 @@ function makeDefaultProfile(){
     avatarId:id,
     diceSkin:'red',
     ownedDice:['red','blue','green','black','white','multi'],
-    totalEarned:0,
+    totalEarned:0,          // lifetime WINNINGS only — drives rank + leaderboard
+    purchasedTotal:0,       // chips bought with money — analytics only, never rank
     xp:0,
     referredBy:null,        // UID of the player who referred me (set once)
     referralPaid:false,     // did my referral bonus pay out yet? (once only)
@@ -7388,7 +7389,13 @@ function grantChipPurchase(packId){
   // Persist the new balance so chips are NOT lost on navigation
   if(_profile){
     _profile.balance=balance;
-    _profile.totalEarned=(_profile.totalEarned||0)+t.chips;
+    // Purchased chips do NOT count toward totalEarned. totalEarned is the
+    // lifetime-WINNINGS figure that drives the status tier (Shorty->Legend)
+    // and the global leaderboard's orderBy('totalEarned','desc') — letting a
+    // cash purchase feed it would sell the #1 spot and Legend rank outright.
+    // Spend recognition already has its own channel: Premium. We keep the
+    // purchased total in its own field for analytics instead.
+    _profile.purchasedTotal=(_profile.purchasedTotal||0)+t.chips;
     if(window._saveProfile)window._saveProfile(_profile).catch(()=>{});
   }
   const csb=document.getElementById('cs-balance-val');
@@ -10532,7 +10539,8 @@ async function createProfile(){
     ownedDice:['red','blue','green','black','white','multi'],
     luckyUses:0,
     balance:10000,
-    totalEarned:0,
+    totalEarned:0,          // lifetime WINNINGS only — drives rank + leaderboard
+    purchasedTotal:0,       // chips bought with money — analytics only, never rank
     wins:0,
     losses:0,
     lastSeenTier:'Shorty',
