@@ -5369,7 +5369,6 @@ html,body{
     <div style="width:100%;display:flex;flex-direction:column;align-items:center;animation:fadeUp .5s ease-out .4s both;">
       <div class="social-divider"><span>or sign in with</span></div>
       <div class="landing-social">
-        <button class="btn-social btn-fb" onclick="loginFacebook()">📘 Continue with Facebook <span class="social-bonus-tag">+$2K</span></button>
         <button class="btn-social btn-gg" onclick="loginGoogle()">🔵 Continue with Google <span class="social-bonus-tag">+$2K</span></button>
       </div>
     </div>
@@ -7465,8 +7464,6 @@ async function buyChips(tierIdx){
   grantChipPurchase(t.productId);
 }
 
-function loginFacebook(){showToast('Facebook login coming soon! 📘');}
-
 // Google sign-in / account-linking. If the player is currently an anonymous
 // guest, we LINK Google to that same account — preserving their UID, chips, and
 // stats. If the Google account is already registered (linked before, e.g. on
@@ -8111,9 +8108,9 @@ async function prPromptCreateAccount(){
     {title:'Host Your Own Table',okLabel:'Sign In'}
   );
   if(ok){
-    // Send them to the landing screen to sign in with Google / Facebook.
+    // Send them to the landing screen to sign in with Google.
     goToLanding();
-    showToast('Sign in with Google or Facebook to host \ud83d\udc51');
+    showToast('Sign in with Google to host \ud83d\udc51');
   }
 }
 
