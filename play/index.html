@@ -7995,7 +7995,6 @@ function goToPrivateRoom(){
     prShowView('choice');
     document.getElementById('pr-title').textContent='Private Table';
     showScreen('privroom');
-    prSweepStaleRooms();
   });
 }
 
@@ -8005,7 +8004,6 @@ function goHostFromEmpty(){
   mpEnter(()=>{
     showScreen('privroom');
     prShowHostSetup();
-    prSweepStaleRooms();
   });
 }
 
@@ -8145,14 +8143,16 @@ function _prGenCode(){
   return c;
 }
 
-// ── Host heartbeat + stale-room sweep ───────────────────────────────────
+// ── Host heartbeat ──────────────────────────────────────────────────────
 // Instead of onDisconnect().remove() (which fires on every minor connection
 // blip and kills the room), the host writes lastSeen=Date.now() every 15s.
-// Any device that opens the lobby sweeps rooms with lastSeen >5min ago and
-// deletes them. Net effect: brief disconnects don't lose the room, but
-// truly abandoned rooms still get cleaned up.
+// Stale rooms are then swept SERVER-SIDE by the scheduled sweepStaleRooms
+// Cloud Function (runs every 10 min, deletes rooms whose lastSeen/createdAt
+// is older than 15 min). The client deliberately does NOT sweep: the
+// hardened RTDB rules correctly refuse to list all of /privrooms to a
+// client, so a client-side sweep can only ever fail. Net effect: brief
+// disconnects don't lose the room, but abandoned rooms still get cleaned up.
 const PR_HEARTBEAT_MS=15000;
-const PR_STALE_ROOM_MS=5*60*1000;  // 5 minutes
 let _prHeartbeatId=null;
 
 function prStartHostHeartbeat(){
@@ -8182,30 +8182,6 @@ function prWriteHeartbeat(){
     // Don't toast — heartbeat failures are noise, and we'd spam the user.
     // Just log for debugging.
     console.warn('Heartbeat failed (will retry):',err&&err.message);
-  });
-}
-
-// Sweep stale rooms — called when the user opens the privroom lobby. We
-// scan all rooms once and delete any whose lastSeen is older than 5min
-// (or which never had a lastSeen and were created >5min ago). Safe to run
-// from any device; Firebase rules can require the deletes to be by the
-// hostUid if you want stricter guarantees.
-function prSweepStaleRooms(){
-  if(!_rtdb)return;
-  _rtdb.ref('privrooms').once('value').then(snap=>{
-    const rooms=snap.val()||{};
-    const now=Date.now();
-    for(const code in rooms){
-      const r=rooms[code];
-      if(!r)continue;
-      const ref=r.lastSeen||r.createdAt||0;
-      if(now-ref>PR_STALE_ROOM_MS){
-        _rtdb.ref('privrooms/'+code).remove().catch(()=>{});
-      }
-    }
-  }).catch(err=>{
-    // Permission errors are fine to swallow — sweep is best-effort.
-    console.warn('Stale-room sweep skipped:',err&&err.message);
   });
 }
 
