@@ -2881,28 +2881,30 @@ html,body{
      all 8 chips stay on a single row — wrapping makes ACE drop to a 2nd
      row and the table looks visually off-center beneath it. */
   #screen-freeroll .fr-prize-strip{
-    padding:5px 28px !important;
-    gap:7px !important;
+    padding:3px 28px !important;
+    gap:6px !important;
     width:min(1100px,94%) !important;
     margin:0 auto !important;
     flex:0 0 auto !important;
     flex-wrap:nowrap !important;
     justify-content:center !important;
   }
+  /* Payout chips trimmed a fraction — slightly shorter padding and type — so
+     the strip gives a few vertical pixels back to the felt below it. */
   #screen-freeroll .fr-prize-chip{
-    padding:5px 10px !important;
+    padding:4px 9px !important;
     min-width:0 !important;
     flex:1 1 0 !important;
-    border-radius:9px !important;
+    border-radius:8px !important;
   }
   #screen-freeroll .fpc-hand{
-    font-size:.8rem !important;
-    letter-spacing:.05em !important;
-    margin-bottom:1px !important;
+    font-size:.74rem !important;
+    letter-spacing:.04em !important;
+    margin-bottom:0 !important;
     white-space:nowrap !important;
   }
   #screen-freeroll .fpc-amt{
-    font-size:1rem !important;
+    font-size:.92rem !important;
     font-weight:700 !important;
   }
 
@@ -2915,7 +2917,7 @@ html,body{
     width:min(1100px,94%) !important;
     max-height:none !important;
     min-height:0 !important;
-    margin:4px auto 2px !important;
+    margin:1px auto 2px !important;   /* was 4px — table sits closer to the payout strip */
     padding:2px !important;
     display:flex !important;
     border-radius:16px !important;
