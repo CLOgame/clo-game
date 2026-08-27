@@ -431,8 +431,13 @@ html,body{
 .premium-badge{font-size:.78rem;letter-spacing:.08em;background:linear-gradient(135deg,var(--gold2),var(--gold));color:#1a0800;padding:3px 10px;border-radius:6px;font-family:'Barlow',sans-serif;font-weight:700;}
 
 .social-divider{display:flex;align-items:center;gap:8px;margin:8px 0 6px;}
-.social-divider::before,.social-divider::after{content:'';flex:1;height:1px;background:rgba(212,168,67,.15);}
-.social-divider span{font-size:.5rem;letter-spacing:.3em;text-transform:uppercase;color:rgba(240,230,204,.3);}
+/* This block is the LAST .social-divider definition in the file, so it wins the
+   cascade over the earlier ones. It used to render the label at .5rem and 30%
+   opacity cream, which vanished into the green landing gradient — the text was
+   effectively invisible on a phone. Brighter, slightly larger, with a shadow so
+   it stays readable wherever the gradient lands behind it. */
+.social-divider::before,.social-divider::after{content:'';flex:1;height:1px;background:rgba(255,255,255,.28);}
+.social-divider span{font-size:.66rem;letter-spacing:.26em;text-transform:uppercase;color:rgba(255,255,255,.82);text-shadow:0 1px 3px rgba(0,0,0,.55);font-weight:600;}
 .landing-social{width:100%;display:flex;flex-direction:column;gap:6px;}
 .btn-social{width:100%;padding:10px 14px;border:none;border-radius:10px;cursor:pointer;font-family:'Bebas Neue',sans-serif;font-size:clamp(.8rem,2vw,.95rem);letter-spacing:.12em;display:flex;align-items:center;justify-content:center;gap:8px;transition:filter .2s;}
 .btn-fb{background:linear-gradient(135deg,#1877f2,#0d5bbf);color:#fff;box-shadow:0 3px 0 #0a4a9e,0 5px 12px rgba(24,119,242,.35);}
@@ -4929,7 +4934,7 @@ html,body{
     border-radius: 11px !important;
     margin: 0 !important;
   }
-  .social-divider{font-size: .55rem !important; margin: 6px 0 !important;}
+  .social-divider{font-size: .66rem !important; margin: 6px 0 !important;}
   .landing-top-bar{padding: 4px 12px !important;}
   .landing-top-bar .currency-pill{transform: scale(.82); transform-origin: right center;}
 
