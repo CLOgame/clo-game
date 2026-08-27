@@ -2791,6 +2791,12 @@ html,body{
     background:radial-gradient(circle at 35% 35%,#888,#333) !important;
     font-size:1.05rem !important;
   }
+  /* Clear chip — wipes the stacked bet. Deliberately dimmer than PASS so it
+     doesn't read as an action that ends your round. */
+  #screen-mp-game .mp-chip-btn.bchip.bchip-clear{
+    background:radial-gradient(circle at 35% 35%,#5a6070,#22262e) !important;
+    font-size:1.15rem !important;border-color:rgba(255,255,255,.25) !important;
+  }
   #screen-mp-game .mp-chip-btn.bchip:active{transform:scale(.92) !important;}
   #screen-mp-game .mp-chip-btn.bchip.disabled,#screen-mp-game .mp-chip-btn.bchip:disabled{
     opacity:.35 !important;filter:grayscale(.6) !important;
@@ -8607,6 +8613,11 @@ function mpEnterTable(roomRef,isHost){
 // Chip preset buttons shown during the betting phase. Order = display order.
 // (Future: scale tiers up for higher-bankroll rooms; v75 launches with $100K.)
 const MP_CHIP_PRESETS=[1000,5000,10000,25000];  // last button is always "All In"
+// How long the host waits after the LAST bet change before rolling. Chips
+// now STACK, so this clock restarts on every tap — 3s was too tight to add
+// a second chip, and in a heads-up game (one non-bank bettor) it fired the
+// instant you tapped, which read as "my bet is locked".
+const MP_EARLY_CLOSE_MS=6000;
 const MP_BET_TIMER_MS=20000;     // 20s to bet or pass
 const MP_SHOOTER_TIMER_MS=20000; // 20s per shooter to roll
 
@@ -8922,7 +8933,8 @@ function mpRenderBettingPhase(room,round){
   if(_mpIsHost){
     const allIn=Object.values(bets).every(b=>b&&b.status!=='pending');
     if(allIn&&Object.keys(bets).length>0){
-      mpHostScheduleEarlyClose(round);
+      const sig=Object.keys(bets).sort().map(u=>u+':'+bets[u].status+':'+(bets[u].amount||0)).join('|');
+      mpHostScheduleEarlyClose(round,sig);
     }else{
       mpHostCancelEarlyClose();
     }
@@ -8933,18 +8945,26 @@ function mpRenderBettingPhase(room,round){
 // (which can't happen with the current UI, but defensive). The host writes
 // phase='pre-roll' after the window — same as the normal timer expiry.
 let _mpEarlyCloseTimer=null;
-function mpHostScheduleEarlyClose(round){
-  if(_mpEarlyCloseTimer)return;  // already counting down
+let _mpEarlyCloseSig=null;
+// sig = a fingerprint of everyone's current bet. While it keeps changing the
+// player is still adjusting, so the countdown restarts instead of running out
+// underneath them. Only once the table goes quiet for MP_EARLY_CLOSE_MS does
+// the host roll.
+function mpHostScheduleEarlyClose(round,sig){
+  if(_mpEarlyCloseTimer&&sig===_mpEarlyCloseSig)return;  // nothing changed
+  if(_mpEarlyCloseTimer)clearTimeout(_mpEarlyCloseTimer);
+  _mpEarlyCloseSig=sig;
   _mpEarlyCloseTimer=setTimeout(()=>{
-    _mpEarlyCloseTimer=null;
+    _mpEarlyCloseTimer=null;_mpEarlyCloseSig=null;
     // Re-check phase before advancing — host might have advanced via timer already
     if(_mpRoom&&_mpRoom.round&&_mpRoom.round.phase==='betting'){
       mpHostFinalizeBetting(_mpRoom.round);
     }
-  },3000);
+  },MP_EARLY_CLOSE_MS);
 }
 function mpHostCancelEarlyClose(){
   if(_mpEarlyCloseTimer){clearTimeout(_mpEarlyCloseTimer);_mpEarlyCloseTimer=null;}
+  _mpEarlyCloseSig=null;
 }
 
 function mpBuildBetStatusLog(room,round){
@@ -8997,7 +9017,9 @@ function mpShowBetPanel(room,round){
     if(!canAfford)btn.classList.add('disabled');
     btn.disabled=!canAfford;
     btn.textContent='$'+(amt>=1000?(amt/1000)+'K':amt);
-    btn.onclick=()=>mpPlaceBet(amt);
+    // Chips ADD to the current bet, matching single-player's addBet(). Tap
+    // $5K twice for $10K, or $25K + $1K for $26K.
+    btn.onclick=()=>mpAddBet(amt);
     panel.appendChild(btn);
   });
 
@@ -9007,9 +9029,18 @@ function mpShowBetPanel(room,round){
     allInBtn.className='mp-chip-btn bchip bchip-allin';
     allInBtn.innerHTML='ALL<br>IN';
     allInBtn.title='All in: $'+myBalance.toLocaleString();
-    allInBtn.onclick=()=>mpPlaceBet(myBalance);
+    allInBtn.onclick=()=>mpSetBet(myBalance);   // absolute, not additive
     panel.appendChild(allInBtn);
   }
+
+  // Clear chip — wipes the stack so you can rebuild it. Returns you to
+  // 'pending', which also cancels the host's early-close countdown.
+  const clrBtn=document.createElement('button');
+  clrBtn.className='mp-chip-btn bchip bchip-clear';
+  clrBtn.textContent='\u2715';
+  clrBtn.title='Clear bet';
+  clrBtn.onclick=()=>mpClearBet();
+  panel.appendChild(clrBtn);
 
   // Pass chip (red ✕-style)
   const passBtn=document.createElement('button');
@@ -9026,8 +9057,15 @@ function mpHideBetPanel(){
   if(_mpBetTimerId){clearInterval(_mpBetTimerId);_mpBetTimerId=null;}
 }
 
-// Place a bet by writing to Firebase. Optimistic — the listener will re-render.
-function mpPlaceBet(amount){
+// What am I currently in for this round? 0 if I haven't bet or I passed.
+function mpMyBetAmount(){
+  const b=_mpRoom&&_mpRoom.round&&_mpRoom.round.bets&&_mpRoom.round.bets[_mpMyUid];
+  return (b&&b.status==='bet')?(b.amount||0):0;
+}
+
+// Set the bet to an ABSOLUTE amount (used by All In).
+// Optimistic — the listener will re-render.
+function mpSetBet(amount){
   if(!_mpRoomRef||!_mpMyUid)return;
   const myBalance=mpGetMyBalance(_mpRoom);
   if(amount>myBalance){
@@ -9041,6 +9079,30 @@ function mpPlaceBet(amount){
   }).catch(err=>{
     console.error('Place bet failed',err);
     showToast('Could not place bet');
+  });
+}
+
+// ADD a chip to the current bet. Caps at the balance rather than refusing, so
+// tapping $25K on a $12K stack goes all in instead of doing nothing.
+function mpAddBet(amount){
+  if(!_mpRoomRef||!_mpMyUid)return;
+  const myBalance=mpGetMyBalance(_mpRoom);
+  if(myBalance<=0){showToast('Not enough chips');return;}
+  const next=Math.min(mpMyBetAmount()+amount,myBalance);
+  if(next<=0)return;
+  if(next===mpMyBetAmount()){showToast('Already all in');return;}
+  mpSetBet(next);
+}
+
+// Clear the stack — back to 'pending' so the bet can be rebuilt from scratch.
+function mpClearBet(){
+  if(!_mpRoomRef||!_mpMyUid)return;
+  _mpRoomRef.child('round/bets/'+_mpMyUid).update({
+    status:'pending',
+    amount:0
+  }).catch(err=>{
+    console.error('Clear bet failed',err);
+    showToast('Could not clear bet');
   });
 }
 function mpPlacePass(){
