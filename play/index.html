@@ -13373,8 +13373,12 @@ function playerRoll(pwr){
   stopTurnRing();
   busy=true;
   document.getElementById('btn-shake').disabled=true;
+  // The badge already says "Rolling..." and the dice are visibly tumbling, so
+  // the big centred felt line was a third copy of the same information — and it
+  // sat right on top of the dice animation. Clear the felt instead; it gets
+  // filled with the actual result (money delta) once the roll settles.
   setPlayerBadge('Rolling...','idle');
-  setFeltMsg('Rolling your dice...','info');
+  setFeltMsg('','info');
   clearFeltDice('p');
   const _pwr=pwr||0.55;
 
