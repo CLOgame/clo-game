@@ -13431,6 +13431,12 @@ function playerRoll(pwr){
     setLog('You: '+vals.join('-')+' → '+hand.label);
     console.log('Player rolled:',vals,'detected:',hand);
     if(hand.type==='reroll'){
+      // Clear the felt's "Rolling your dice..." first. This branch returns
+      // early, so without this the felt message stayed on screen underneath
+      // the badge and the player saw BOTH at once — visually cluttered, and
+      // the felt line was stale by then anyway. The badge alone carries the
+      // outcome and the next action.
+      setFeltMsg('','info');
       setPlayerBadge('No point — shake again!','idle');
       setLog('No Point — roll again!');
       document.getElementById('btn-shake').disabled=false;
