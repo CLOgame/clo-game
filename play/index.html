@@ -9502,7 +9502,11 @@ function mpRenderShooterArea(round,state){
     // Anticipation beat. "Player rolling…" goes to the log strip below.
     row.innerHTML='';
     mpClearDiceStage();
-    _mpLastShooterDiceKey=null;  // reset so the reveal throw fires fresh
+    // Deliberately NOT resetting _mpLastShooterDiceKey here. This branch runs
+    // on every sync while the shooter shakes, and nulling the guard let the
+    // following reveal re-throw the same dice on each pass — the perpetual
+    // tumble. The key now carries round+uid, so the next real throw differs
+    // on its own and no reset is needed.
     const seat=mpFindSeatByUid(_mpRoom,state.uid);
     const nm=seat?(seat.username||'Player'):'Player';
     mpSetLog(`${nm} rolling…`);
@@ -9522,6 +9526,7 @@ function mpRenderShooterArea(round,state){
   const seat=mpFindSeatByUid(_mpRoom,state.uid);
   const nm=seat?(seat.username||'Player'):'Player';
   const isMe=(state.uid===_mpMyUid);
+  const throwKey=(_mpRoom&&_mpRoom.round&&_mpRoom.round.number)+':'+state.uid;
   mpThrowShooterDice(state.dice,0.7,()=>{
     const who=isMe?'YOU':nm.toUpperCase();
     const hand=(state.hand||'').toUpperCase();
@@ -9552,7 +9557,7 @@ function mpRenderShooterArea(round,state){
     }
     // Keep the on-felt label cleared.
     if(label){label.textContent='';label.className='mp-shooter-label';}
-  });
+  },throwKey);
 }
 
 // Animate three dice jittering in place for the shooter shake phase.
@@ -10088,8 +10093,15 @@ function mpClearDiceStage(){
   try{ if(Array.isArray(_dice)){_dice.forEach(d=>d&&d.destroy&&d.destroy());_dice=[];} }catch(_){}
 }
 
-function mpThrowShooterDice(vals,power,onSettle){
-  const key=(vals||[]).join(',');
+function mpThrowShooterDice(vals,power,onSettle,keySuffix){
+  // The key USED to be the dice values alone. That collided badly: any render
+  // pass that reset the key (see mpRenderShooter) let the SAME dice be thrown
+  // again, stacking a second and third set on the felt and restarting the
+  // tumble forever. With three devices syncing, updates land inside the
+  // animation window often enough to loop indefinitely. Key now includes the
+  // round + shooter uid so a genuinely new throw is the only thing that
+  // re-triggers it, and a repeat of identical values can't.
+  const key=(keySuffix||'')+'|'+(vals||[]).join(',');
   if(key===_mpLastShooterDiceKey){
     if(_mpShooterSettled&&onSettle)onSettle();
     return;
