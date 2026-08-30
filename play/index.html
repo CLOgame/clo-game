@@ -10436,10 +10436,18 @@ function mpLeaveTable(skipFirebase){
       // the seat so the host's settlement doesn't try to settle the bet
       // (or pay them out) against a missing seat.
       const forfeit=mpBetAtRiskAmount();
-      _mpRoomRef.child('seats').once('value').then(snap=>{
+      // CAPTURE these into locals. Everything below runs inside async
+      // callbacks, and the teardown at the bottom of this function nulls
+      // _mpRoomRef / _mpMyUid synchronously — long before the reads resolve.
+      // Reading the globals in here threw "Cannot read properties of null
+      // (reading 'update')" and killed the whole leave path: no pass written,
+      // no seat dropped, host waiting forever on a player who had gone.
+      const roomRef=_mpRoomRef;
+      const myUid=_mpMyUid;
+      roomRef.child('seats').once('value').then(snap=>{
         const seats=snap.val()||{};
         let mine;
-        for(const k in seats){if(seats[k]&&seats[k].uid===_mpMyUid){mine=k;break;}}
+        for(const k in seats){if(seats[k]&&seats[k].uid===myUid){mine=k;break;}}
         if(forfeit>0){
           // Pay the forfeit to the bank's bankroll, then mark the bet as
           // already resolved so host settlement leaves it alone. We also
@@ -10447,23 +10455,23 @@ function mpLeaveTable(skipFirebase){
           // shooter queue, the host's listener sees a "resolved" current
           // shooter and advances the queue past them naturally. Use a
           // single multi-path update so it's atomic-ish.
-          _mpRoomRef.once('value').then(rs=>{
+          roomRef.once('value').then(rs=>{
             const room=rs.val()||{};
             const bankrollBefore=room.bankroll||0;
             const updates={};
             updates['bankroll']=bankrollBefore+forfeit;
-            updates['round/bets/'+_mpMyUid+'/status']='forfeit';
-            updates['round/bets/'+_mpMyUid+'/resultType']='lose';
-            updates['round/bets/'+_mpMyUid+'/forfeitedAt']=Date.now();
+            updates['round/bets/'+myUid+'/status']='forfeit';
+            updates['round/bets/'+myUid+'/resultType']='lose';
+            updates['round/bets/'+myUid+'/forfeitedAt']=Date.now();
             // Placeholder dice (1-1-1 / Trips, but it doesn't matter since
             // settlement looks at status==='bet' not the dice) so the host
             // sees a "rolled" entry and auto-advances the shooter queue.
-            updates['round/bets/'+_mpMyUid+'/dice']=[1,1,1];
-            updates['round/bets/'+_mpMyUid+'/hand']='Forfeit';
-            updates['round/bets/'+_mpMyUid+'/shooting']=false;
+            updates['round/bets/'+myUid+'/dice']=[1,1,1];
+            updates['round/bets/'+myUid+'/hand']='Forfeit';
+            updates['round/bets/'+myUid+'/shooting']=false;
             if(mine!==undefined)updates['seats/'+mine]=null;
-            _mpRoomRef.update(updates).catch(()=>{});
-          });
+            roomRef.update(updates).catch(e=>console.warn('[mp] leave forfeit write failed',e));
+          }).catch(e=>console.warn('[mp] leave forfeit read failed',e));
         }else{
           // No chips at risk — but the seat STILL has to be cleared out of the
           // round, not just out of the seat list. Previously this branch only
@@ -10473,13 +10481,13 @@ function mpLeaveTable(skipFirebase){
           // all-bets-in check can complete, and drop the seat in the same
           // update so both land together.
           const updates={};
-          updates['round/bets/'+_mpMyUid+'/status']='pass';
-          updates['round/bets/'+_mpMyUid+'/amount']=0;
-          updates['round/bets/'+_mpMyUid+'/leftAt']=Date.now();
+          updates['round/bets/'+myUid+'/status']='pass';
+          updates['round/bets/'+myUid+'/amount']=0;
+          updates['round/bets/'+myUid+'/leftAt']=Date.now();
           if(mine!==undefined)updates['seats/'+mine]=null;
-          _mpRoomRef.update(updates).catch(()=>{});
+          roomRef.update(updates).catch(e=>console.warn('[mp] leave pass write failed',e));
         }
-      });
+      }).catch(e=>console.warn('[mp] leave seats read failed',e));
     }
   }
 
