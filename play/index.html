@@ -10464,8 +10464,20 @@ function mpLeaveTable(skipFirebase){
             if(mine!==undefined)updates['seats/'+mine]=null;
             _mpRoomRef.update(updates).catch(()=>{});
           });
-        }else if(mine!==undefined){
-          _mpRoomRef.child('seats/'+mine).remove().catch(()=>{});
+        }else{
+          // No chips at risk — but the seat STILL has to be cleared out of the
+          // round, not just out of the seat list. Previously this branch only
+          // removed the seat, so the host kept waiting on a bet from a player
+          // who had gone ("WAITING FOR SEAN AND ZAB TO BET…") and their pill
+          // stayed in the header. Mark the bet resolved as a pass so the
+          // all-bets-in check can complete, and drop the seat in the same
+          // update so both land together.
+          const updates={};
+          updates['round/bets/'+_mpMyUid+'/status']='pass';
+          updates['round/bets/'+_mpMyUid+'/amount']=0;
+          updates['round/bets/'+_mpMyUid+'/leftAt']=Date.now();
+          if(mine!==undefined)updates['seats/'+mine]=null;
+          _mpRoomRef.update(updates).catch(()=>{});
         }
       });
     }
