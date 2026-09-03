@@ -8336,17 +8336,24 @@ function prJoinRoom(){
       showAlert('That table is full.');
       return;
     }
-    // Claim the seat
+    // Claim the seat.
+    // Each fallback must guard the FIELD, not just _profile. `_profile ? _profile.username : 'Player'`
+    // still yields undefined when the profile object exists but the key does not —
+    // and RTDB rejects the ENTIRE set on one undefined, so the join failed with
+    // "value argument contains undefined in property 'privrooms.<code>.seats.N.username'"
+    // while showing a misleading security-rules message.
+    const p=_profile||{};
     const seatData={
       uid:_uid,
-      username:_profile?_profile.username:'Player',
-      avatarEmoji:_profile?_profile.avatarEmoji:'🎲',
-      avatarColor:_profile?_profile.avatarColor:'#1e7fc8',
-      avatarId:_profile?_profile.avatarId:'skull',
-      tier:_profile?(_profile.lastSeenTier||getStatus(_profile.totalEarned||0).name):'Shorty',
+      username:p.username||'Player',
+      avatarEmoji:p.avatarEmoji||'🎲',
+      avatarColor:p.avatarColor||'#1e7fc8',
+      avatarId:p.avatarId||'skull',
+      tier:p.lastSeenTier||getStatus(p.totalEarned||0).name||'Shorty',
       balance:(typeof balance!=='undefined'?balance:10000),
       joinedAt:Date.now()
     };
+    for(const k in seatData){if(seatData[k]===undefined)delete seatData[k];}
     ref.child('seats/'+mySeat).set(seatData).then(()=>{
       ref.child('seats/'+mySeat).onDisconnect().remove();
       _prRoomCode=code;
@@ -8358,13 +8365,13 @@ function prJoinRoom(){
       if(btn){btn.disabled=false;btn.textContent='🎟️ Join Table';}
       console.error('Join failed:',err);
       showAlert('Could not claim a seat.\n\nError: '+(err&&err.message?err.message:'unknown')+
-        '\n\nThis is often a Firebase database permission (security rules) issue.');
+        '\n\nIf the error says "undefined in property", it is a bad value in the write, not permissions.');
     });
   }).catch(err=>{
     if(btn){btn.disabled=false;btn.textContent='🎟️ Join Table';}
     console.error('Lookup failed:',err);
     showAlert('Could not look up that table.\n\nError: '+(err&&err.message?err.message:'unknown')+
-      '\n\nThis is often a Firebase database permission (security rules) issue.');
+      '\n\nIf the error says "undefined in property", it is a bad value in the write, not permissions.');
   });
 }
 
