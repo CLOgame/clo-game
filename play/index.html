@@ -9697,14 +9697,21 @@ function mpHostBeginSettlement(){
   for(const uid in bets){
     const b=bets[uid];
     if(b&&b.status==='bet'&&b.amount>0){
+      // b.hand is UNDEFINED on a bet that has not rolled yet (the key does not
+      // exist until mpPlayerRoll's reveal write lands). RTDB accepts null but
+      // REJECTS undefined, and it rejects the ENTIRE update — so one unrolled
+      // shooter killed the whole settlement write and hung the round with
+      // "values argument contains undefined in property ...settlementSummary...hand".
+      // Coalesce to null so a partial summary still writes.
+      const hand=(b.hand===undefined)?null:b.hand;
       if(b.resultType==='win'){
-        summary[uid]={delta:+b.amount,reason:'win',hand:b.hand};
+        summary[uid]={delta:+b.amount,reason:'win',hand:hand};
         bankDelta-=b.amount;
       }else if(b.resultType==='lose'){
-        summary[uid]={delta:-b.amount,reason:'lose',hand:b.hand};
+        summary[uid]={delta:-b.amount,reason:'lose',hand:hand};
         bankDelta+=b.amount;
       }else{
-        summary[uid]={delta:0,reason:'push',hand:b.hand};
+        summary[uid]={delta:0,reason:'push',hand:hand};
       }
     }
   }
@@ -9737,6 +9744,12 @@ function mpHostApplySettlement(summary,bankDelta){
   updates['round/phase']='settlement';
   updates['round/settlementSummary']=summary;
   updates['round/bankDelta']=bankDelta;
+
+  // GENERAL GUARD: a single undefined anywhere in an RTDB multi-path update
+  // rejects the whole write. This is the second time an atomic write has died
+  // on one bad value, so strip undefined defensively rather than trusting
+  // every field upstream.
+  for(const k in updates){if(updates[k]===undefined)delete updates[k];}
 
   _mpRoomRef.update(updates).catch(err=>{
     console.error('Settlement write failed',err);
