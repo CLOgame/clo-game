@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-06a';
+  window.CLO_BUILD = '2026-09-06b';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -7284,6 +7284,12 @@ function chipShopBack(){
     goToLobby();
   }else if(dest==='game'){
     showScreen('game');
+  }else if(dest==='mp-game'){
+    // Came from a bust-out at a live multiplayer table. The seat and the room
+    // listener were never torn down — goToChipShop only swaps screens — so
+    // returning here drops the player straight back into their seat with the
+    // chips they just bought.
+    showScreen('mp-game');
   }else{
     goToLanding();
   }
@@ -9789,6 +9795,82 @@ function mpHostApplySettlement(summary,bankDelta){
   });
 }
 
+// ── Multiplayer bust-out ────────────────────────────────────────────────
+// A shooter who hits $0 at a live table is not stuck: passing is always
+// legal, so the table keeps running around them. That means we can offer a
+// top-up WITHOUT tearing down their seat — goToChipShop() only swaps screens
+// and never touches _mpRoomRef, _mpRoom or the seat, so the room listener
+// stays live and they come back to the same chair.
+// Deliberately no Watch Ad option here: claimAdFromRewards() still grants
+// $1,000 with no ad attached, so offering it at the exact moment someone
+// might pay would just hand out free chips.
+let _mpBustShown=false;
+function mpCheckBustOut(room){
+  if(!_mpRoomRef)return;
+  // Host is excluded: their displayed "balance" is the table bankroll, not
+  // their own purse, so a zero there means the BANK is broke — a different
+  // problem with a different fix.
+  if(_mpIsHost||(room&&room.hostUid===_mpMyUid))return;
+  if(balance>0){_mpBustShown=false;return;}
+  if(_mpBustShown)return;   // listener fires repeatedly; show once
+  _mpBustShown=true;
+  mpShowBustOut();
+}
+
+function mpShowBustOut(){
+  let d=document.getElementById('mp-gameover');
+  if(!d){
+    d=document.createElement('div');
+    d.className='gameover';
+    d.id='mp-gameover';
+    d.innerHTML=
+      '<div class="go-title">💀 Out of chips</div>'+
+      '<div class="go-sub">Your seat is still yours \u2014 top up and keep playing.</div>'+
+      '<div class="go-tagline">Pick your way back in:</div>'+
+      '<div class="go-options">'+
+        '<button class="go-opt go-opt-shop" onclick="mpBustShop()">'+
+          '<div class="go-opt-emoji">\ud83d\udcb0</div>'+
+          '<div class="go-opt-text">'+
+            '<div class="go-opt-title">BUY CHIPS</div>'+
+            '<div class="go-opt-sub">Keep your seat at the table</div>'+
+          '</div></button>'+
+        '<button class="go-opt go-opt-primary" onclick="mpBustFreeRoll()">'+
+          '<div class="go-opt-emoji">\ud83c\udfb2</div>'+
+          '<div class="go-opt-text">'+
+            '<div class="go-opt-title">FREE ROLL</div>'+
+            '<div class="go-opt-sub">Leaves the table</div>'+
+          '</div></button>'+
+        '<button class="go-opt" onclick="mpBustStay()">'+
+          '<div class="go-opt-emoji">\ud83d\udc40</div>'+
+          '<div class="go-opt-text">'+
+            '<div class="go-opt-title">STAY \u0026 WATCH</div>'+
+            '<div class="go-opt-sub">Sit out until you top up</div>'+
+          '</div></button>'+
+      '</div>';
+    document.body.appendChild(d);
+  }
+  requestAnimationFrame(()=>d.classList.add('show'));
+}
+function mpBustClose(){
+  const d=document.getElementById('mp-gameover');
+  if(d)d.classList.remove('show');
+}
+function mpBustShop(){
+  // Seat and listener survive this — see the note above.
+  mpBustClose();
+  goToChipShop('mp-game');
+}
+function mpBustFreeRoll(){
+  mpBustClose();
+  awardXP('comeback');
+  if(typeof mpLeaveTable==='function')mpLeaveTable();
+  setTimeout(()=>goToFreeRoll(),150);
+}
+function mpBustStay(){
+  mpBustClose();
+  showToast('Sitting out \u2014 top up any time from the chip store');
+}
+
 function mpRenderSettlementPhase(room,round){
   const summary=(round.settlementSummary)||{};
   const noBets=summary.noBets;
@@ -9798,6 +9880,11 @@ function mpRenderSettlementPhase(room,round){
 
   // Update local balance from seats
   mpSyncLocalBalanceFromRoom(room);
+
+  // Broke player? Offer a way back in. MP never had this — showGameOver()
+  // is only wired into single player — so a busted shooter just sat at $0
+  // with no prompt. Checked after the sync so `balance` is current.
+  mpCheckBustOut(room);
 
   // Round is over — clear the bank's standing "Point N" result so it doesn't
   // linger behind the win/lose/push message in the center band.
