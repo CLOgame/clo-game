@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-06b';
+  window.CLO_BUILD = '2026-09-06c';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -7287,8 +7287,11 @@ function chipShopBack(){
   }else if(dest==='mp-game'){
     // Came from a bust-out at a live multiplayer table. The seat and the room
     // listener were never torn down — goToChipShop only swaps screens — so
-    // returning here drops the player straight back into their seat with the
-    // chips they just bought.
+    // returning here drops the player straight back into their seat.
+    // The purchase must be pushed INTO the seat: the seat is what the bet
+    // buttons read, and the room listener syncs it back over the local
+    // balance. Without this the player returns still busted.
+    if(typeof mpPushBalanceToSeat==='function')mpPushBalanceToSeat();
     showScreen('mp-game');
   }else{
     goToLanding();
@@ -9824,27 +9827,15 @@ function mpShowBustOut(){
     d.className='gameover';
     d.id='mp-gameover';
     d.innerHTML=
+      '<button class="rewards-close" onclick="mpBustClose()" aria-label="Close">\u2715</button>'+
       '<div class="go-title">💀 Out of chips</div>'+
       '<div class="go-sub">Your seat is still yours \u2014 top up and keep playing.</div>'+
-      '<div class="go-tagline">Pick your way back in:</div>'+
       '<div class="go-options">'+
         '<button class="go-opt go-opt-shop" onclick="mpBustShop()">'+
           '<div class="go-opt-emoji">\ud83d\udcb0</div>'+
           '<div class="go-opt-text">'+
             '<div class="go-opt-title">BUY CHIPS</div>'+
             '<div class="go-opt-sub">Keep your seat at the table</div>'+
-          '</div></button>'+
-        '<button class="go-opt go-opt-primary" onclick="mpBustFreeRoll()">'+
-          '<div class="go-opt-emoji">\ud83c\udfb2</div>'+
-          '<div class="go-opt-text">'+
-            '<div class="go-opt-title">FREE ROLL</div>'+
-            '<div class="go-opt-sub">Leaves the table</div>'+
-          '</div></button>'+
-        '<button class="go-opt" onclick="mpBustStay()">'+
-          '<div class="go-opt-emoji">\ud83d\udc40</div>'+
-          '<div class="go-opt-text">'+
-            '<div class="go-opt-title">STAY \u0026 WATCH</div>'+
-            '<div class="go-opt-sub">Sit out until you top up</div>'+
           '</div></button>'+
       '</div>';
     document.body.appendChild(d);
@@ -9856,19 +9847,10 @@ function mpBustClose(){
   if(d)d.classList.remove('show');
 }
 function mpBustShop(){
-  // Seat and listener survive this — see the note above.
+  // Seat and listener survive this — see the note above. The purchase is
+  // pushed into the seat by chipShopBack() on the way back.
   mpBustClose();
   goToChipShop('mp-game');
-}
-function mpBustFreeRoll(){
-  mpBustClose();
-  awardXP('comeback');
-  if(typeof mpLeaveTable==='function')mpLeaveTable();
-  setTimeout(()=>goToFreeRoll(),150);
-}
-function mpBustStay(){
-  mpBustClose();
-  showToast('Sitting out \u2014 top up any time from the chip store');
 }
 
 function mpRenderSettlementPhase(room,round){
@@ -9971,8 +9953,26 @@ function mpRenderSettlementPhase(room,round){
 }
 
 // ── Balance helpers ─────────────────────────────────────────────────────
-function mpGetMyBalance(room){
-  if(!room||!_mpMyUid)return 0;
+// Push the local `balance` into this player's RTDB seat.
+// The SEAT is the source of truth for betting: mpGetMyBalance reads it, the
+// chip buttons gate on it, and mpSyncLocalBalanceFromRoom reads it BACK into
+// the local `balance` on every listener fire. So buying chips without this
+// left the player still busted — their purchase updated the local var and
+// Firestore, then got overwritten by the stale seat value on the next sync.
+function mpPushBalanceToSeat(){
+  if(!_mpRoomRef||!_mpMyUid||!_mpRoom)return;
+  if(_mpIsHost||_mpRoom.hostUid===_mpMyUid)return;  // host balance is the bankroll
+  const seats=_mpRoom.seats||{};
+  for(const k in seats){
+    if(seats[k]&&seats[k].uid===_mpMyUid){
+      _mpRoomRef.child('seats/'+k+'/balance').set(balance)
+        .catch(e=>console.warn('[mp] seat balance push failed',e));
+      return;
+    }
+  }
+}
+
+function mpGetMyBalance(room){  if(!room||!_mpMyUid)return 0;
   if(room.hostUid===_mpMyUid)return room.bankroll||0;
   const seats=room.seats||{};
   for(const k in seats){
