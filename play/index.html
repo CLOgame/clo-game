@@ -32,6 +32,15 @@
      registered worker with a fetch handler. sw.js is network-first so it never
      traps players on stale game code (see sw.js for the rationale). -->
 <script>
+  // BUILD STAMP. Bump this every deploy. Every device prints it at boot, so
+  // "which build is this phone actually running?" is a two-second question
+  // instead of a guess — service worker + Chrome origin cache mean an
+  // installed device can sit on an old build indefinitely, and uninstalling
+  // the app does NOT clear it (the game lives in Chrome's storage for the
+  // origin, not in the TWA shell).
+  window.CLO_BUILD = '2026-09-06a';
+  console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
+              'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
       // Absolute path on purpose: this file now lives at /play/index.html, so a
