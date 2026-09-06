@@ -8880,6 +8880,9 @@ function mpHostAction(){/* placeholder — replaced by mpSetActionBtn */}
 // Local state for the bet timer (countdown shown in UI + auto-pass watchdog)
 let _mpBetTimerId=null;
 let _mpShooterTimerId=null;
+// True from the moment a shooter presses Roll until the reveal write lands.
+// Stops a double-press erasing a decided result — see mpPlayerRoll.
+let _mpRollInFlight=false;
 
 // Render the bet panel + per-player status strip. Called from the betting
 // phase on every Firebase update, so it stays in sync with other players'
@@ -9336,6 +9339,18 @@ function mpPlayerRoll(){
   const idx=round.currentShooterIdx||0;
   if(queue[idx]!==_mpMyUid)return;  // not my turn
 
+  // ALREADY-ROLLED GUARD. The turn/phase checks above do not stop a second
+  // press: the index only advances after the reveal write round-trips through
+  // the host, leaving a window where it is still "my turn" on a hand I have
+  // already thrown. And because the shake write below nulls dice/hand/resultType,
+  // a second press does not merely re-roll — it ERASES a decided result and
+  // replaces it. That let a shooter re-roll a loss into a win.
+  const myBet=(round.bets||{})[_mpMyUid];
+  if(myBet&&(myBet.shooting===true||myBet.resultType)){return;}
+  // Local re-entrancy latch for the window before the write lands.
+  if(_mpRollInFlight)return;
+  _mpRollInFlight=true;
+
   // Generate the roll up-front (deterministic — what we'll commit at the end)
   const final=mpResolveRollUntilDecided();
   const resultType=mpCompareToBankPoint(final,round);
@@ -9359,9 +9374,10 @@ function mpPlayerRoll(){
         hand:final.label,
         resultType:resultType,
         rolledAt:Date.now()
-      }).catch(err=>console.error('Player roll reveal failed',err));
+      }).catch(err=>console.error('Player roll reveal failed',err))
+        .then(()=>{_mpRollInFlight=false;});
     },1200);
-  }).catch(err=>console.error('Player roll shake failed',err));
+  }).catch(err=>{_mpRollInFlight=false;console.error('Player roll shake failed',err);});
 }
 
 // Host force-rolls for a player whose timer expired (offline / AFK / stuck).
@@ -9767,6 +9783,9 @@ function mpHostApplySettlement(summary,bankDelta){
 function mpRenderSettlementPhase(room,round){
   const summary=(round.settlementSummary)||{};
   const noBets=summary.noBets;
+  // Round is over — release the roll latch so the next round is not blocked
+  // if a reveal write never resolved.
+  _mpRollInFlight=false;
 
   // Update local balance from seats
   mpSyncLocalBalanceFromRoom(room);
