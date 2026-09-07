@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-06d';
+  window.CLO_BUILD = '2026-09-07a';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -8665,6 +8665,17 @@ function mpInitRound(num){
     if(s&&s.uid&&s.uid!==_mpRoom.hostUid){
       bets[s.uid]={status:'pending',amount:0};
     }
+  }
+  // EMPTY TABLE GUARD. With no shooters left, `bets` is {} and the queue comes
+  // out empty — so the bank rolled, set a point, nobody bet, the round pushed,
+  // and Next Round restarted the whole loop. The host could sit there rolling
+  // against nobody indefinitely. Hold at the last screen instead and tell them.
+  if(Object.keys(bets).length===0){
+    mpSetStatus('Everyone has left the table');
+    mpSetMsg('No players left — invite someone or leave the table');
+    mpSetActionBtn(null);
+    showToast('Table is empty');
+    return;
   }
   const round={
     number:num,
