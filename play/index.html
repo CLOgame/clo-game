@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-07a';
+  window.CLO_BUILD = '2026-09-07b';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -7951,7 +7951,12 @@ document.getElementById('username-input').addEventListener('keydown',e=>{if(e.ke
 // ════════════════════════════════════════════════════════════════════════
 //  PRIVATE ROOMS — Multiplayer Phase A (host / join / live waiting room)
 // ════════════════════════════════════════════════════════════════════════
-const PR_HOST_BANKROLL=100000;   // minimum chips required to host
+const PR_HOST_BANKROLL=100000;   // MINIMUM chips required to host.
+// NOTE: this is the entry requirement ONLY. It used to double as the amount
+// seeded into the table bankroll, so every host — whether they held 100K or
+// 50M — sat down behind a flat 100,000 and the bank was the smallest stack at
+// the table. The seed now comes from the host's actual balance; see the room
+// creation below.
 const PR_MAX_SEATS=3;            // shooters per table (host is separate) — bank + 3
 let _prRoomCode=null;            // current private room code
 let _prIsHost=false;             // am I the host (the Bank)?
@@ -8262,7 +8267,7 @@ function prCreateRoom(){
     hostColor:String(prof.avatarColor||'#28a020'),
     hostAvatarId:String(prof.avatarId||'crown'),
     hostTier:String(prof.lastSeenTier||(getStatus(prof.totalEarned||0)||{}).name||'Shorty'),
-    bankroll:PR_HOST_BANKROLL,
+    bankroll:(balance||PR_HOST_BANKROLL),
     public:!!isPublic,
     status:'waiting',
     createdAt:Date.now(),
@@ -9935,6 +9940,35 @@ function mpRenderSettlementPhase(room,round){
       if(bd>0)mpSetMsg(`Bank +$${bd.toLocaleString()}`);
       else if(bd<0)mpSetMsg(`Bank -$${(-bd).toLocaleString()}`);
       else mpSetMsg('Bank breaks even');
+      // PERSIST THE HOST'S RESULT. This branch used to set a message and
+      // nothing else — the host's wins and losses lived only in room.bankroll
+      // and evaporated when the table closed. Now that the bankroll is seeded
+      // from their real purse, it has to be written back or hosting either
+      // mints or destroys chips. Gated on round number so a listener re-fire
+      // cannot double-count.
+      const hostKey='mp-host-counted-'+(round.number||0);
+      if(_profile&&!window[hostKey]){
+        window[hostKey]=true;
+        const newBal=(room.bankroll!=null)?room.bankroll:balance;
+        balance=newBal;
+        _profile.balance=newBal;
+        if(bd>0){
+          _profile.wins=(_profile.wins||0)+1;
+          _profile.winStreak=(_profile.winStreak||0)+1;
+          _profile.totalEarned=(_profile.totalEarned||0)+bd;
+        }else if(bd<0){
+          _profile.losses=(_profile.losses||0)+1;
+          _profile.winStreak=0;
+        }
+        if(window._updateProfile)window._updateProfile({
+          wins:_profile.wins||0,
+          losses:_profile.losses||0,
+          totalEarned:_profile.totalEarned||0,
+          balance:_profile.balance||0,
+          winStreak:_profile.winStreak||0
+        }).catch(()=>{});
+        if(bd>0)checkTierUp();
+      }
     }else{
       mpSetMsg('Round settled');
     }
