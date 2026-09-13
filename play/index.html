@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-13e';
+  window.CLO_BUILD = '2026-09-13f';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -139,7 +139,7 @@ html,body{
 /* Same pop, but every frame keeps the .money translateY so the amount does
    not snap back under the callout when the animation lands. Keep the offset
    here in sync with .felt-msg.money. */
-@keyframes winPopMoney{0%{transform:translateY(clamp(130px,16vh,170px)) scale(.3);opacity:0}50%{transform:translateY(clamp(130px,16vh,170px)) scale(1.3);opacity:1}70%{transform:translateY(clamp(130px,16vh,170px)) scale(.93)}85%{transform:translateY(clamp(130px,16vh,170px)) scale(1.08)}100%{transform:translateY(clamp(130px,16vh,170px)) scale(1);opacity:1}}
+@keyframes winPopMoney{0%{transform:translateY(clamp(52px,12vh,104px)) scale(.3);opacity:0}50%{transform:translateY(clamp(52px,12vh,104px)) scale(1.3);opacity:1}70%{transform:translateY(clamp(52px,12vh,104px)) scale(.93)}85%{transform:translateY(clamp(52px,12vh,104px)) scale(1.08)}100%{transform:translateY(clamp(52px,12vh,104px)) scale(1);opacity:1}}
 @keyframes turnRing{from{stroke-dashoffset:0}to{stroke-dashoffset:283}}
 @keyframes btnShine{0%{left:-100%}100%{left:200%}}
 @keyframes floatUp{0%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-80px) scale(1.4)}}
@@ -4353,13 +4353,12 @@ html,body{
    clearly subordinate to it. Applied automatically by setFeltMsg(). */
 .felt-msg.money{
   font-size:clamp(1.5rem,4.2vw,2.4rem);
-  /* The floor matters more than the ratio. On a landscape phone the CSS
-     viewport height is small (~360px), so a vh-based offset collapsed to its
-     minimum and a SHORT amount ("+$2,500") still landed inside the callout —
-     while a long one ("-$1,300,000") cleared it purely by being too wide to
-     fit there. The offset must clear the headline regardless of string
-     length, so the floor is set past the callout's descenders. */
-  transform:translateY(clamp(130px,16vh,170px));
+  /* Offset clears the callout's descenders. Kept deliberately modest: on a
+     landscape phone the felt is short, and a larger floor pushed the amount
+     off the felt entirely and behind the chip row. The real reason wins
+     looked unmoved was winPop overwriting this transform — see
+     .win-anim.money, and keep that keyframe's offset in sync with this. */
+  transform:translateY(clamp(52px,12vh,104px));
   position:relative;
   z-index:6;
   letter-spacing:.08em;
