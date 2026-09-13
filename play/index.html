@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-13c';
+  window.CLO_BUILD = '2026-09-13d';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -4349,7 +4349,13 @@ html,body{
    clearly subordinate to it. Applied automatically by setFeltMsg(). */
 .felt-msg.money{
   font-size:clamp(1.5rem,4.2vw,2.4rem);
-  transform:translateY(clamp(52px,12vh,104px));
+  /* The floor matters more than the ratio. On a landscape phone the CSS
+     viewport height is small (~360px), so a vh-based offset collapsed to its
+     minimum and a SHORT amount ("+$2,500") still landed inside the callout —
+     while a long one ("-$1,300,000") cleared it purely by being too wide to
+     fit there. The offset must clear the headline regardless of string
+     length, so the floor is set past the callout's descenders. */
+  transform:translateY(clamp(130px,16vh,170px));
   position:relative;
   z-index:6;
   letter-spacing:.08em;
