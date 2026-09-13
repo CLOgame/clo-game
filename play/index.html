@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-13b';
+  window.CLO_BUILD = '2026-09-13c';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -4339,6 +4339,22 @@ html,body{
 }
 .felt-msg.info{color:var(--gold2);opacity:1;}
 
+/* ── Money result (.money) ────────────────────────────────────────────────
+   A bare payout ("+$30,000") is centred on the same point as showCallout(),
+   so the big headline painted straight over it — the amount was only legible
+   where the callout's descenders left a gap. Drop it clear of the headline
+   and give it its own size: the shared .felt-msg size is tuned for sentence
+   prompts ("Place your bet to begin") and is far too small for a number that
+   needs to land. Roughly a third of the callout — readable at a glance,
+   clearly subordinate to it. Applied automatically by setFeltMsg(). */
+.felt-msg.money{
+  font-size:clamp(1.5rem,4.2vw,2.4rem);
+  transform:translateY(clamp(52px,12vh,104px));
+  position:relative;
+  z-index:6;
+  letter-spacing:.08em;
+}
+
 /* ── Light-felt (gold/yellow room) text contrast ──────────────────────────
    On the gold felt, gold-on-gold copy disappears. When #screen-game has the
    .felt-light class (set by applyRoomFelt for the VIP room), flip the neutral
@@ -5131,6 +5147,13 @@ html,body{
     font-size: clamp(.95rem, 2.8vw, 1.5rem) !important;
     line-height: 1.15 !important;
     padding: 0 16px !important;
+  }
+  /* ...but a payout amount still needs to read. The rule above is for
+     sentence prompts; a bare "+$30,000" shrunk to 1.5rem and tucked under a
+     full-width callout was the reason the number was missable. */
+  .felt-msg.money{
+    font-size: clamp(1.35rem, 5.5vw, 2.1rem) !important;
+    padding: 0 !important;
   }
   .bank-badge-center, .pbadge{
     font-size: .8rem !important;
@@ -13254,7 +13277,15 @@ function stopPowerBar(){
 
 
 
-function setFeltMsg(txt,cls){const m=document.getElementById('felt-msg');m.textContent=txt;m.className='felt-msg '+cls;}
+function setFeltMsg(txt,cls){
+  const m=document.getElementById('felt-msg');
+  m.textContent=txt;
+  // A message that is ONLY a payout ("+$30,000" / "-$5,000") gets .money —
+  // moved clear of the callout and sized to be read. Detected here rather
+  // than threading a flag through ~17 call sites.
+  const isMoney=/^[+-]\$[\d,]+$/.test((txt||'').trim());
+  m.className='felt-msg '+cls+(isMoney?' money':'');
+}
 function setLog(txt,cls){const l=document.getElementById('game-log-strip');if(l){l.textContent=txt;l.className='game-log-strip '+(cls||'');}}
 function setBankBadge(txt,cls){const b=document.getElementById('bank-badge-center');if(b){b.textContent=txt;b.className='bank-badge-center bbc-'+cls;}}
 function setBankPt(pt){
@@ -13517,7 +13548,7 @@ function rollBank(){
       soundLose();showCallout(hand.label);
       glowFeltDice('b','lose');
       // Money only — showCallout(hand.label) above already prints the hand.
-      setFeltMsg('-$'+bet,'lose');
+      setFeltMsg('-$'+bet.toLocaleString(),'lose');
       setLog('Bank: '+vals.join('-')+' ('+hand.label+') — you lose $'+bet,'l');
       addDot('l');
       scheduleClearFeltDice('b',1400);
@@ -13533,7 +13564,7 @@ function rollBank(){
       // YOU collect the money. The +$ amount inside the text tells the
       // player they won. Symmetric to how 'Ace! You lose' shows in red.
       // Money only — showCallout('Bank Busts!') above already prints the hand.
-      setFeltMsg('+$'+won,'lose');triggerWinAnim();
+      setFeltMsg('+$'+won.toLocaleString(),'win');triggerWinAnim();
       setLog('Bank busted '+vals.join('-')+'! You win $'+won,'w');
       // NOTE: No milestone/XP bonus for a bank bust. A bank bust is the BANK's
       // roll (an Ace), not a player achievement — the player already collects
@@ -13738,7 +13769,7 @@ function playerRoll(pwr){
       const won=bet;balance+=bet*2;wins++;
      try{
       soundWin();setPlayerPt(null);showCallout(hand.label);
-      setFeltMsg('+$'+won,'win');triggerWinAnim();
+      setFeltMsg('+$'+won.toLocaleString(),'win');triggerWinAnim();
       setLog('You rolled '+vals.join('-')+' ('+hand.label+') — +$'+won,'w');
       // ── Special-hand REP tracking + milestone bonuses ──
       // Track lifetime counts of each special win. Award bonus REP every
@@ -13809,7 +13840,7 @@ function playerRoll(pwr){
     }else if(hand.type==='lose'){
       soundLose();setPlayerPt('ace');showCallout('Ace!');
       // Money only — showCallout('Ace!') above already prints the hand.
-      setFeltMsg('-$'+bet,'lose');
+      setFeltMsg('-$'+bet.toLocaleString(),'lose');
       setLog('Ace! ('+vals.join('-')+') — lose $'+bet,'l');
       addDot('l');busy=false;endRound(false,true);
     }else{
@@ -13818,7 +13849,7 @@ function playerRoll(pwr){
         const won=bet;balance+=bet*2;wins++;soundWin();
         showCallout(pp+' Beats '+bankPoint+'!');
         // Money only — showCallout(pp+' Beats '+bankPoint+'!') prints the hand.
-        setFeltMsg('+$'+won,'win');triggerWinAnim();
+        setFeltMsg('+$'+won.toLocaleString(),'win');triggerWinAnim();
         setLog('Point '+pp+' beats bank '+bankPoint+'. +$'+won,'w');
         addDot('w');busy=false;endRound(true,true);
       }else if(pp===bankPoint){
