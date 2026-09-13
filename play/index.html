@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-13d';
+  window.CLO_BUILD = '2026-09-13e';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -136,6 +136,10 @@ html,body{
 @keyframes dieRoll{0%{transform:translateX(-200px) rotate(-360deg) scale(.3);opacity:0}60%{transform:translateX(8px) rotate(20deg) scale(1.05);opacity:1}80%{transform:translateX(-4px) rotate(-8deg) scale(.97)}100%{transform:translateX(0) rotate(0) scale(1);opacity:1}}
 @keyframes calloutPop{0%{transform:translate(-50%,-50%) scale(.2) rotate(-5deg);opacity:0}45%{transform:translate(-50%,-50%) scale(1.4) rotate(2deg);opacity:1}65%{transform:translate(-50%,-50%) scale(.9) rotate(-1deg);opacity:1}80%{transform:translate(-50%,-50%) scale(1.1);opacity:1}100%{transform:translate(-50%,-50%) scale(1) rotate(0);opacity:1}}
 @keyframes winPop{0%{transform:scale(.3);opacity:0}50%{transform:scale(1.3);opacity:1}70%{transform:scale(.93)}85%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}
+/* Same pop, but every frame keeps the .money translateY so the amount does
+   not snap back under the callout when the animation lands. Keep the offset
+   here in sync with .felt-msg.money. */
+@keyframes winPopMoney{0%{transform:translateY(clamp(130px,16vh,170px)) scale(.3);opacity:0}50%{transform:translateY(clamp(130px,16vh,170px)) scale(1.3);opacity:1}70%{transform:translateY(clamp(130px,16vh,170px)) scale(.93)}85%{transform:translateY(clamp(130px,16vh,170px)) scale(1.08)}100%{transform:translateY(clamp(130px,16vh,170px)) scale(1);opacity:1}}
 @keyframes turnRing{from{stroke-dashoffset:0}to{stroke-dashoffset:283}}
 @keyframes btnShine{0%{left:-100%}100%{left:200%}}
 @keyframes floatUp{0%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-80px) scale(1.4)}}
@@ -4383,6 +4387,12 @@ html,body{
     0 3px 8px rgba(0,0,0,.7);
 }
 .win-anim{animation:winPop .6s cubic-bezier(.36,.07,.19,.97) forwards;}
+/* A .money message carries a translateY that lifts it clear of the callout.
+   winPop animates `transform` and ends on `transform:scale(1)` with
+   `forwards` — which REPLACES that translate, dropping the amount straight
+   back under the headline. Losses looked correct only because they never
+   call triggerWinAnim(). Same pop, offset preserved. */
+.win-anim.money{animation:winPopMoney .6s cubic-bezier(.36,.07,.19,.97) forwards;}
 
 /* ── Bottom action bar ── */
 .game-bottom-bar{
