@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-07f';
+  window.CLO_BUILD = '2026-09-07g';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -8664,6 +8664,13 @@ function mpEnterTable(roomRef,isHost){
 // Chip preset buttons shown during the betting phase. Order = display order.
 // (Future: scale tiers up for higher-bankroll rooms; v75 launches with $100K.)
 const MP_CHIP_PRESETS=[1000,5000,10000,25000];  // last button is always "All In"
+// Per-hand ceiling for any one shooter in multiplayer. Limits how much a
+// single hand can take off the bank — a shooter holding millions could
+// otherwise wager all of it against a far smaller bankroll.
+// NOTE: this is a blast-radius limit, NOT a solvency guarantee. Several
+// shooters at the cap can still exceed what the bank holds; that needs a
+// bankroll-derived cap, which is still open.
+const MP_MAX_BET=100000;
 // How long the host waits after the LAST bet change before rolling. Chips
 // now STACK, so this clock restarts on every tap — 3s was too tight to add
 // a second chip, and in a heads-up game (one non-bank bettor) it fired the
@@ -9095,13 +9102,18 @@ function mpShowBetPanel(room,round){
     panel.appendChild(btn);
   });
 
-  // All-In chip (gold)
+  // All-In chip (gold). Above the per-hand cap this is NOT all in — calling it
+  // that while it wagers a fraction of the stack reads as a bug.
   if(myBalance>0){
     const allInBtn=document.createElement('button');
     allInBtn.className='mp-chip-btn bchip bchip-allin';
-    allInBtn.innerHTML='ALL<br>IN';
-    allInBtn.title='All in: $'+myBalance.toLocaleString();
-    allInBtn.onclick=()=>mpSetBet(myBalance);   // absolute, not additive
+    const capped=myBalance>MP_MAX_BET;
+    const amt=capped?MP_MAX_BET:myBalance;
+    allInBtn.innerHTML=capped
+      ? 'MAX<br>$'+(MP_MAX_BET/1000)+'K'
+      : 'ALL<br>IN';
+    allInBtn.title=(capped?'Max bet: $':'All in: $')+amt.toLocaleString();
+    allInBtn.onclick=()=>mpSetBet(amt);   // absolute, not additive
     panel.appendChild(allInBtn);
   }
 
@@ -9144,6 +9156,13 @@ function mpSetBet(amount){
     showToast('Not enough chips');
     return;
   }
+  // PER-HAND CAP. Enforced HERE rather than on the chip buttons, because the
+  // buttons are additive (mpAddBet) and All In calls this directly with the
+  // whole stack — gating the buttons alone would be bypassed by both.
+  if(amount>MP_MAX_BET){
+    amount=MP_MAX_BET;
+    showToast('Max bet is $'+MP_MAX_BET.toLocaleString()+' per hand');
+  }
   if(amount<=0)return;
   _mpRoomRef.child('round/bets/'+_mpMyUid).update({
     status:'bet',
@@ -9160,9 +9179,17 @@ function mpAddBet(amount){
   if(!_mpRoomRef||!_mpMyUid)return;
   const myBalance=mpGetMyBalance(_mpRoom);
   if(myBalance<=0){showToast('Not enough chips');return;}
-  const next=Math.min(mpMyBetAmount()+amount,myBalance);
+  // Ceiling is whichever runs out first: your stack or the per-hand cap.
+  const ceiling=Math.min(myBalance,MP_MAX_BET);
+  const cur=mpMyBetAmount();
+  const next=Math.min(cur+amount,ceiling);
   if(next<=0)return;
-  if(next===mpMyBetAmount()){showToast('Already all in');return;}
+  if(next===cur){
+    showToast(cur>=MP_MAX_BET
+      ? 'Max bet is $'+MP_MAX_BET.toLocaleString()+' per hand'
+      : 'Already all in');
+    return;
+  }
   mpSetBet(next);
 }
 
