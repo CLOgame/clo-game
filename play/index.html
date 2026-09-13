@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-13a';
+  window.CLO_BUILD = '2026-09-13b';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -12890,11 +12890,12 @@ function shareRefUrl(){
   // location.origin: the game is still reachable at the legacy
   // clogame.github.io/clo-game/ URL, and deriving the base there would keep
   // minting stale-domain invites. clochamps.com is what we advertise.
-  // Points at /play/ as of Aug 16 2026: the root is now a marketing landing
-  // page, and applyPendingReferral() only reads ?ref= from the game's own URL.
-  // The landing page forwards any ?ref= it receives to /play/, so the millions
-  // of older clochamps.com/?ref= links already shared keep working.
-  const base='https://clochamps.com/play/';
+  // Points at the ROOT, not /play/: shorter, more memorable, and it's what
+  // people type from memory anyway. Verified Sep 13 2026 that the root
+  // forwards the query string intact — clochamps.com/?ref=TEST123 lands on
+  // /play/?ref=TEST123 — so applyPendingReferral(), which only reads ?ref=
+  // from the game's own URL, still sees the tag.
+  const base='https://clochamps.com/';
   const uid=(_uid||(_profile&&_profile.uid)||'').toString();
   return uid ? base+'?ref='+encodeURIComponent(uid) : base;
 }
