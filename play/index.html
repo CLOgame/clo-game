@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-07d';
+  window.CLO_BUILD = '2026-09-07f';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -5670,7 +5670,7 @@ html,body{
           <div class="pr-stat-val" id="pr-your-balance">$0</div>
         </div>
       </div>
-      <div class="pr-note">As host, you play as the Bank. A minimum of 100,000 chips is held as your bankroll to cover shooter payouts. You need at least this much to host.</div>
+      <div class="pr-note">As host, you play as the Bank. Your full balance backs the table and covers shooter payouts — you can leave at any time to stop. You need at least $100,000 to host.</div>
 
       <!-- Public/private toggle — when ON, the table shows up in the lobby's
            Open Tables list so any player can join. Default is OFF so hosts
@@ -8142,8 +8142,14 @@ function prShowHostSetup(){
     btn.textContent='👑 Create Table';
     btn.onclick=prCreateRoom;
     if(note){
-      note.innerHTML='As host, you play as the Bank. A minimum of 100,000 chips is '+
-        'held as your bankroll to cover shooter payouts.';
+      // Copy must state the REAL stake. The bankroll used to be a flat
+      // PR_HOST_BANKROLL (100,000) regardless of the host's purse, so "a
+      // minimum of 100,000 is held" was accurate. Since the whole-purse
+      // change the table is seeded with the host's ENTIRE balance, and the
+      // old wording told a host with 100M that only 100K was at risk.
+      note.innerHTML='As host, you play as the Bank. Your <b>full balance of $'+
+        (balance||0).toLocaleString()+'</b> backs the table and covers shooter '+
+        'payouts \u2014 you can leave the table at any time to stop.';
     }
   }
   prShowView('host');
@@ -8677,9 +8683,11 @@ function mpInitRound(num){
     const s=seats[k];
     if(s&&s.uid&&s.uid!==_mpRoom.hostUid){
       // A seat with no chips CANNOT place a bet, so leaving it 'pending' hung
-      // the whole table on someone with nothing to wager. Start them passed;
-      // if they top up they're back in from the next round.
-      const broke=!(s.balance>0);
+      // the whole table on someone with nothing to wager. Start them passed.
+      // Require an EXPLICIT numeric zero — a missing or not-yet-synced balance
+      // must NOT count as broke, or a player with chips gets passed for them
+      // and every round dead-ends in "no bets".
+      const broke=(typeof s.balance==='number'&&s.balance<=0);
       bets[s.uid]=broke?{status:'pass',amount:0,brokePass:true}
                        :{status:'pending',amount:0};
     }
