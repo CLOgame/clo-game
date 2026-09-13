@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-07g';
+  window.CLO_BUILD = '2026-09-13a';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -12863,12 +12863,16 @@ function animateFelt(prefix,cb,power,preVals,stageId){
 //   1000th → $2,500,000 (legend tier)
 // Non-milestone counts return 0 (regular REP-only reward applies).
 function getSpecialMilestoneBonus(count){
-  if(count===1)return 100;
-  if(count===10)return 500;
-  if(count===25)return 2500;
-  if(count===50)return 7500;
-  if(count===100)return 25000;
-  if(count===250)return 100000;
+  // Chip bonus for hitting a round number of C-LOs / Headcracks / Trips.
+  // The old bottom end (1st=$100, 10th=$500) was far too small to register
+  // as a reward — $100 at a table whose smallest chip is $1,000 reads as a
+  // rounding error rather than a milestone.
+  if(count===1)return 1000;
+  if(count===10)return 2500;
+  if(count===25)return 7500;
+  if(count===50)return 15000;
+  if(count===100)return 40000;
+  if(count===250)return 125000;
   if(count===500)return 500000;
   if(count===1000)return 2500000;
   return 0;
