@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-13f';
+  window.CLO_BUILD = '2026-09-13g';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -8389,6 +8389,28 @@ function prJoinRoom(){
       showAlert('No table found with code "'+code+'".\n\nDouble-check the code with the host. The code is case-sensitive and must be exactly 5 characters.');
       return;
     }
+    // REJOIN. Check BEFORE the pre-game gate: a player who already holds a
+    // seat at this table is returning to it, not joining a new one, so the
+    // round being underway is irrelevant to them. Their seat was held (not
+    // deleted) by the onDisconnect above, which is what makes this possible.
+    const existingSeats=room.seats||{};
+    let mySeatKey=null;
+    for(const k in existingSeats){
+      if(existingSeats[k]&&existingSeats[k].uid===_uid){mySeatKey=k;break;}
+    }
+    if(mySeatKey!==null){
+      // Clear the absent flag and re-arm the disconnect handlers.
+      ref.child('seats/'+mySeatKey+'/status').set('active').catch(()=>{});
+      ref.child('seats/'+mySeatKey+'/status').onDisconnect().set('absent');
+      ref.child('round/bets/'+_uid+'/status').onDisconnect().set('pass');
+      _prRoomCode=code;
+      _prIsHost=false;
+      _prRoomRef=ref;
+      if(btn){btn.disabled=false;btn.textContent='🎟️ Join Table';}
+      showToast('Welcome back \u2014 you\u2019re in from the next round');
+      prEnterWaitingRoom();
+      return;
+    }
     if(room.status!=='waiting'){
       if(btn){btn.disabled=false;btn.textContent='🎟️ Join Table';}
       showAlert('That table has already started or is closed.\n\nAsk the host to create a new table.');
@@ -8430,7 +8452,24 @@ function prJoinRoom(){
     };
     for(const k in seatData){if(seatData[k]===undefined)delete seatData[k];}
     ref.child('seats/'+mySeat).set(seatData).then(()=>{
-      ref.child('seats/'+mySeat).onDisconnect().remove();
+      // DISCONNECT HANDLING.
+      // This used to be onDisconnect().remove(), which deleted the seat the
+      // moment the socket dropped. Two problems: the player could never get
+      // back in (nothing left to match their uid against, and the join gate
+      // only admits pre-game), and the host was left waiting on a bet from
+      // someone who no longer had a seat.
+      // Now the seat is HELD and flagged absent, and the round bet is passed
+      // so the table moves on without them. Both run SERVER-side, so they
+      // survive a force-quit, a dead signal or the back gesture — none of
+      // which give our own leave code a chance to run.
+      // Two separate registrations rather than one room-level update: each
+      // targets a path this client already writes to, so neither needs write
+      // permission it doesn't already have.
+      // 'status' is used rather than a new field because it is an existing
+      // validated string on the seat — an unknown key risks a rules rejection
+      // that would fail silently.
+      ref.child('seats/'+mySeat+'/status').onDisconnect().set('absent');
+      ref.child('round/bets/'+_uid+'/status').onDisconnect().set('pass');
       _prRoomCode=code;
       _prIsHost=false;
       _prRoomRef=ref;
@@ -8727,14 +8766,17 @@ function mpInitRound(num){
   for(const k in seats){
     const s=seats[k];
     if(s&&s.uid&&s.uid!==_mpRoom.hostUid){
-      // A seat with no chips CANNOT place a bet, so leaving it 'pending' hung
-      // the whole table on someone with nothing to wager. Start them passed.
-      // Require an EXPLICIT numeric zero — a missing or not-yet-synced balance
-      // must NOT count as broke, or a player with chips gets passed for them
-      // and every round dead-ends in "no bets".
+      // A seat with no chips CANNOT place a bet, and an ABSENT seat has
+      // nobody behind it — leaving either as 'pending' hangs the whole table
+      // on someone who will never answer. Start both passed; they are back in
+      // from the round after they return or top up.
+      // Require an EXPLICIT numeric zero for broke — a missing or not-yet-
+      // synced balance must NOT count, or a player with chips gets passed for
+      // them and every round dead-ends in "no bets".
       const broke=(typeof s.balance==='number'&&s.balance<=0);
-      bets[s.uid]=broke?{status:'pass',amount:0,brokePass:true}
-                       :{status:'pending',amount:0};
+      const absent=(s.status==='absent');
+      bets[s.uid]=(broke||absent)?{status:'pass',amount:0,brokePass:true}
+                                 :{status:'pending',amount:0};
     }
   }
   // EMPTY TABLE GUARD. With no shooters left, `bets` is {} and the queue comes
