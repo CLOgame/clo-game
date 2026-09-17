@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-13g';
+  window.CLO_BUILD = '2026-09-17a';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -8005,6 +8005,33 @@ const PR_HOST_BANKROLL=100000;   // MINIMUM chips required to host.
 // creation below.
 const PR_MAX_SEATS=3;            // shooters per table (host is separate) — bank + 3
 let _prRoomCode=null;            // current private room code
+// Seat index this client holds in the current private room, or null.
+// Needed by the reconnect watcher below: onDisconnect handlers fire ONCE and
+// are then discarded, so after the first drop the seat has no protection —
+// and nothing clears the 'absent' flag when Firebase auto-reconnects with the
+// app still open, which would leave the player auto-passed every round.
+let _prMySeatKey=null;
+let _prReconnectWatch=false;
+
+// Re-arm on every reconnect. Runs for as long as this client holds a seat.
+function prArmSeatPresence(){
+  if(!_rtdb||!_prRoomRef||_prMySeatKey===null)return;
+  const ref=_prRoomRef,seatKey=_prMySeatKey,uid=_uid;
+  ref.child('seats/'+seatKey+'/status').set('active').catch(()=>{});
+  ref.child('seats/'+seatKey+'/status').onDisconnect().set('absent');
+  ref.child('round/bets/'+uid+'/status').onDisconnect().set('pass');
+  if(_prReconnectWatch)return;
+  _prReconnectWatch=true;
+  _rtdb.ref('.info/connected').on('value',snap=>{
+    if(snap.val()!==true)return;
+    if(!_prRoomRef||_prMySeatKey===null)return;   // no longer seated
+    // Back online: clear the absent flag the server set for us and register
+    // fresh handlers, since the previous ones were consumed when they fired.
+    _prRoomRef.child('seats/'+_prMySeatKey+'/status').set('active').catch(()=>{});
+    _prRoomRef.child('seats/'+_prMySeatKey+'/status').onDisconnect().set('absent');
+    _prRoomRef.child('round/bets/'+_uid+'/status').onDisconnect().set('pass');
+  });
+}
 let _prIsHost=false;             // am I the host (the Bank)?
 let _prRoomRef=null;             // firebase ref to the room
 let _prRoomListener=null;        // active value listener
@@ -8399,13 +8426,11 @@ function prJoinRoom(){
       if(existingSeats[k]&&existingSeats[k].uid===_uid){mySeatKey=k;break;}
     }
     if(mySeatKey!==null){
-      // Clear the absent flag and re-arm the disconnect handlers.
-      ref.child('seats/'+mySeatKey+'/status').set('active').catch(()=>{});
-      ref.child('seats/'+mySeatKey+'/status').onDisconnect().set('absent');
-      ref.child('round/bets/'+_uid+'/status').onDisconnect().set('pass');
       _prRoomCode=code;
       _prIsHost=false;
       _prRoomRef=ref;
+      _prMySeatKey=mySeatKey;
+      prArmSeatPresence();   // clears 'absent' and registers fresh handlers
       if(btn){btn.disabled=false;btn.textContent='🎟️ Join Table';}
       showToast('Welcome back \u2014 you\u2019re in from the next round');
       prEnterWaitingRoom();
@@ -8468,11 +8493,11 @@ function prJoinRoom(){
       // 'status' is used rather than a new field because it is an existing
       // validated string on the seat — an unknown key risks a rules rejection
       // that would fail silently.
-      ref.child('seats/'+mySeat+'/status').onDisconnect().set('absent');
-      ref.child('round/bets/'+_uid+'/status').onDisconnect().set('pass');
       _prRoomCode=code;
       _prIsHost=false;
       _prRoomRef=ref;
+      _prMySeatKey=mySeat;
+      prArmSeatPresence();
       if(btn){btn.disabled=false;btn.textContent='🎟️ Join Table';}
       prEnterWaitingRoom();
     }).catch(err=>{
@@ -8656,6 +8681,16 @@ function prResetState(){
   if(_prRoomListener&&_prRoomRef){
     _prRoomRef.off('value',_prRoomListener);
   }
+  // Leaving deliberately — cancel the pending disconnect writes so they can't
+  // fire later against a room we are no longer in, and drop the seat key so
+  // the reconnect watcher goes quiet.
+  if(_prRoomRef&&_prMySeatKey!==null){
+    try{
+      _prRoomRef.child('seats/'+_prMySeatKey+'/status').onDisconnect().cancel();
+      _prRoomRef.child('round/bets/'+_uid+'/status').onDisconnect().cancel();
+    }catch(e){}
+  }
+  _prMySeatKey=null;
   _prRoomListener=null;
   _prRoomRef=null;
   _prRoomCode=null;
