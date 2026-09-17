@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-17a';
+  window.CLO_BUILD = '2026-09-17b';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -8014,10 +8014,25 @@ let _prMySeatKey=null;
 let _prReconnectWatch=false;
 
 // Re-arm on every reconnect. Runs for as long as this client holds a seat.
-function prArmSeatPresence(){
+// pushBalance: true ONLY on an explicit rejoin-by-code. See the note below.
+function prArmSeatPresence(pushBalance){
   if(!_rtdb||!_prRoomRef||_prMySeatKey===null)return;
   const ref=_prRoomRef,seatKey=_prMySeatKey,uid=_uid;
   ref.child('seats/'+seatKey+'/status').set('active').catch(()=>{});
+  // WHO OWNS THE BALANCE depends on how you got here, and getting this wrong
+  // mints chips:
+  //  - RECONNECT (app stayed open, socket dropped): the SEAT is current. The
+  //    host has been writing settlements to it while we were away, so the seat
+  //    is ahead of our local copy. Do NOT overwrite it.
+  //  - REJOIN BY CODE (new session): the PROFILE is authoritative. The seat
+  //    holds a snapshot from whenever we last sat down, and since seats are
+  //    now HELD rather than deleted on disconnect, that snapshot can be
+  //    arbitrarily stale. Malik hit exactly this — rebuilt his profile at 13k,
+  //    rejoined, and the seat's old 1,000,000+ was synced back over it.
+  if(pushBalance&&typeof balance==='number'){
+    ref.child('seats/'+seatKey+'/balance').set(balance)
+      .catch(e=>console.warn('[mp] rejoin balance assert failed',e));
+  }
   ref.child('seats/'+seatKey+'/status').onDisconnect().set('absent');
   ref.child('round/bets/'+uid+'/status').onDisconnect().set('pass');
   if(_prReconnectWatch)return;
@@ -8027,6 +8042,7 @@ function prArmSeatPresence(){
     if(!_prRoomRef||_prMySeatKey===null)return;   // no longer seated
     // Back online: clear the absent flag the server set for us and register
     // fresh handlers, since the previous ones were consumed when they fired.
+    // Deliberately does NOT touch balance — see above.
     _prRoomRef.child('seats/'+_prMySeatKey+'/status').set('active').catch(()=>{});
     _prRoomRef.child('seats/'+_prMySeatKey+'/status').onDisconnect().set('absent');
     _prRoomRef.child('round/bets/'+_uid+'/status').onDisconnect().set('pass');
@@ -8430,7 +8446,9 @@ function prJoinRoom(){
       _prIsHost=false;
       _prRoomRef=ref;
       _prMySeatKey=mySeatKey;
-      prArmSeatPresence();   // clears 'absent' and registers fresh handlers
+      prArmSeatPresence(true);   // clears 'absent', re-arms, and asserts the
+                                 // PROFILE balance over whatever snapshot the
+                                 // held seat still carries
       if(btn){btn.disabled=false;btn.textContent='🎟️ Join Table';}
       showToast('Welcome back \u2014 you\u2019re in from the next round');
       prEnterWaitingRoom();
