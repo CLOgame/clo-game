@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-17c';
+  window.CLO_BUILD = '2026-09-20b';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -8780,12 +8780,22 @@ function mpEnterTable(roomRef,isHost){
     mpHandleRoundState(room);
   });
 
-  // Host: if there's no round yet, initialize Round 1
+  // Host: if there's no round yet, initialize Round 1.
+  // Reads the WHOLE room, not just 'round': mpInitRound() builds its bets from
+  // _mpRoom.seats, and _mpRoom is only populated by the listener above. This
+  // read can resolve first, leaving seats empty — which the empty-table guard
+  // inside mpInitRound then reads as "everyone has left" and bails. Since this
+  // path runs exactly ONCE, that left the table stuck on "ROUND UNDEFINED"
+  // with no buttons and no retry. Seeding _mpRoom here closes the race.
   if(_mpIsHost){
-    _mpRoomRef.child('round').once('value').then(snap=>{
-      if(!snap.exists()){
-        mpInitRound(1);
-      }
+    _mpRoomRef.once('value').then(snap=>{
+      const room=snap.val();
+      if(!room)return;
+      if(!_mpRoom)_mpRoom=room;
+      if(!room.round)mpInitRound(1);
+    }).catch(err=>{
+      console.error('[mp] round 1 init failed',err);
+      showToast('Could not start the table — leave and create a new one');
     });
   }
 }
@@ -8836,6 +8846,13 @@ function mpInitRound(num){
   // out empty — so the bank rolled, set a point, nobody bet, the round pushed,
   // and Next Round restarted the whole loop. The host could sit there rolling
   // against nobody indefinitely. Hold at the last screen instead and tell them.
+  // NOT READY is not the same as EMPTY: if _mpRoom has not loaded yet, seats
+  // is {} because we have no data, not because the table emptied. Treating
+  // those the same is what wedged round 1 on "ROUND UNDEFINED".
+  if(!_mpRoom||!_mpRoom.seats){
+    console.warn('[mp] mpInitRound called before room loaded — skipping');
+    return;
+  }
   if(Object.keys(bets).length===0){
     mpSetStatus('Everyone has left the table');
     mpSetMsg('No players left — invite someone or leave the table');
@@ -8945,6 +8962,7 @@ function mpHandleRoundState(room){
       mpSetTurnPill(null);   // hide turn pill during betting
       mpSetResult('','');    // clear last round's result callout
       _mpLastSoundKey=null;  // re-arm result sounds for the new round
+      _mpPlayedSoundKeys.clear();
       _mpBankSettled=false;
       _mpShooterSettled=false;
       mpRenderShooterArea(round,null);  // clear any stale shooter dice from previous round
@@ -10418,7 +10436,16 @@ function mpAnimateBankShaking(){
 // bank dice would tumble in mid-air every time a player did anything).
 let _mpLastBankDiceKey=null;
 let _mpLastPhaseKey=null;  // Sub-step B: tracks phase transitions for one-shot dice cleanup
-let _mpLastSoundKey=null;  // plays result sounds exactly once per unique outcome
+let _mpLastSoundKey=null;  // legacy single-slot marker, still used by the
+                           // bank-point cue at ~9034
+// Every result-sound key already played. A SINGLE remembered key is not enough:
+// the settlement render re-runs on every listener tick, so a push re-fires with
+// the same key each time. That was blocked only until some OTHER sound (another
+// player's result, the bank's) overwrote the slot — after which the push played
+// again, and the two kept knocking each other out. That's why a push repeated
+// every few seconds and swallowed the following lose.
+// Cleared per round, so the set never grows.
+let _mpPlayedSoundKeys=new Set();outcome
 // Track whether the CURRENT bank/shooter throw has finished animating. A
 // listener re-fire (balance sync etc.) must NOT reveal the result early while
 // the dice are still mid-air — it should only re-run onSettle if the throw has
@@ -10431,8 +10458,10 @@ let _mpShooterSettled=false;
 // soundLose directly would replay them every sync (the "3 lose sounds" bug).
 // keyed by a stable string for the result; same key = no replay.
 function mpPlayResultSound(key,kind){
-  if(!key||key===_mpLastSoundKey)return;
-  _mpLastSoundKey=key;
+  if(!key)return;
+  if(_mpPlayedSoundKeys.has(key))return;   // already played this round
+  _mpPlayedSoundKeys.add(key);
+  _mpLastSoundKey=key;                     // kept for the bank-point cue
   // A push used to fall through both branches and play NOTHING, so the felt
   // said PUSH while the table stayed silent and you had to read the text to
   // work out what happened. soundPush() already existed for single player —
