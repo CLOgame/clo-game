@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-17b';
+  window.CLO_BUILD = '2026-09-17c';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -10213,13 +10213,47 @@ function mpGetMyBalance(room){  if(!room||!_mpMyUid)return 0;
   }
   return balance||0;
 }
+// BALANCE OWNERSHIP, stated once because getting it wrong has cost four bugs:
+//   • At a live table the SEAT is authoritative. The host is the referee — it
+//     computes settlement and writes each player's new balance to their seat.
+//     This function is how a player actually gets paid.
+//   • At the BOUNDARIES the profile is authoritative: pushed into the seat on
+//     join and on rejoin-by-code (see prArmSeatPresence), and written back out
+//     here so the two cannot drift.
+// The failure mode both ways is silent: chips appear, or quietly vanish.
 function mpSyncLocalBalanceFromRoom(room){
   if(!room||!_mpMyUid)return;
+
+  // Find our own seat so we can judge whether its number is trustworthy.
+  const seats=room.seats||{};
+  let mySeat=null;
+  for(const k in seats){
+    if(seats[k]&&seats[k].uid===_mpMyUid){mySeat=seats[k];break;}
+  }
+  if(mySeat){
+    // An ABSENT seat holds a snapshot from before we dropped, not a live
+    // figure. Seats are HELD rather than deleted on disconnect now, so that
+    // snapshot can be arbitrarily old — reading it back is what restored a
+    // stale 1,000,000+ over a 13k profile.
+    if(mySeat.status==='absent')return;
+    // No balance written yet (seat just claimed, or the push hasn't landed).
+    // Syncing here would overwrite our real balance with a default or a zero.
+    if(typeof mySeat.balance!=='number')return;
+  }
+
   const newBal=mpGetMyBalance(room);
+  if(typeof newBal!=='number')return;
   if(typeof balance!=='undefined'&&newBal!==balance){
     balance=newBal;
-    if(typeof saveBalance==='function')saveBalance();
     mpUpdateBalanceDisplay();
+    // Persist straight through. Previously `balance` tracked the seat while
+    // the profile was only written on some paths, so the two could disagree
+    // and the last writer won.
+    if(_profile){
+      _profile.balance=balance;
+      if(typeof saveLocalProfile==='function')saveLocalProfile(_profile);
+      if(window._updateProfile)window._updateProfile({balance}).catch(()=>{});
+    }
   }
 }
 
@@ -10793,6 +10827,15 @@ function mpConfirmLeave(){
 }
 
 function mpLeaveTable(skipFirebase){
+  // BOUNDARY: leaving hands ownership of the balance back to the profile.
+  // `balance` is already current — mpSyncLocalBalanceFromRoom has been
+  // tracking the seat all session — but the table is about to disappear, so
+  // commit it here rather than relying on whichever path happens to save next.
+  if(_profile&&typeof balance==='number'){
+    _profile.balance=balance;
+    if(typeof saveLocalProfile==='function')saveLocalProfile(_profile);
+    if(window._updateProfile)window._updateProfile({balance}).catch(()=>{});
+  }
   // Detach listener
   if(_mpRoomListener&&_mpRoomRef){
     _mpRoomRef.off('value',_mpRoomListener);
