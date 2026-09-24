@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-24a';
+  window.CLO_BUILD = '2026-09-24b';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -8806,6 +8806,7 @@ function mpEnterTable(roomRef,isHost){
   // path runs exactly ONCE, that left the table stuck on "ROUND UNDEFINED"
   // with no buttons and no retry. Seeding _mpRoom here closes the race.
   if(_mpIsHost){
+    mpStartHostWatchdog();
     _mpRoomRef.once('value').then(snap=>{
       const room=snap.val();
       if(!room)return;
@@ -9111,6 +9112,61 @@ function mpHostAction(){/* placeholder — replaced by mpSetActionBtn */}
 // Local state for the bet timer (countdown shown in UI + auto-pass watchdog)
 let _mpBetTimerId=null;
 let _mpShooterTimerId=null;
+// HOST WATCHDOG (Sep 24). The per-phase timers above are setIntervals started
+// from mpHandleRoundState — which only runs when a SNAPSHOT arrives. When a
+// shooter's device drops (airplane mode, dead signal) nothing writes, so no
+// snapshots arrive, so nothing re-evaluates. Worse, Chrome throttles intervals
+// in BACKGROUND tabs to roughly once a minute, so the host tab sitting behind
+// another window effectively stops rescuing at all. Result: table frozen on
+// "X's turn" with an expired deadline and no way back.
+// This watchdog runs for as long as the host is in a room, re-reads the
+// deadlines from _mpRoom every tick (never from a stale closure), and also
+// fires immediately when the tab becomes visible again.
+let _mpHostWatchId=null;
+let _mpWatchLastAct=0;
+function mpHostWatchdogTick(){
+  if(!_mpIsHost||!_mpRoom||!_mpRoomRef)return;
+  const r=_mpRoom.round;
+  if(!r)return;
+  const now=Date.now();
+  // Don't hammer: one rescue attempt every 3s at most.
+  if(now-_mpWatchLastAct<3000)return;
+  // GRACE: 3s past the deadline, so the shooter's own device gets first shot.
+  if(r.phase==='player-rolls'&&r.shooterDeadline&&now>r.shooterDeadline+3000){
+    const q=r.shooterQueue||[];
+    const uid=q[r.currentShooterIdx||0];
+    if(uid&&uid!==_mpMyUid){
+      const b=(r.bets||{})[uid];
+      if(b&&b.dice&&b.resultType){
+        // They DID roll — the advance just never landed. Nudge it.
+        _mpWatchLastAct=now;
+        console.warn('[mp watchdog] shooter resolved but round stalled — advancing');
+        mpHostAdvanceShooter();
+      }else{
+        _mpWatchLastAct=now;
+        console.warn('[mp watchdog] shooter deadline blown — force-rolling',uid);
+        mpHostForceRollFor(uid);
+      }
+    }
+  }else if(r.phase==='betting'&&r.bettingDeadline&&now>r.bettingDeadline+3000){
+    _mpWatchLastAct=now;
+    console.warn('[mp watchdog] betting deadline blown — closing betting');
+    mpHostFinalizeBetting(r);   // takes the round object
+  }
+}
+function mpStartHostWatchdog(){
+  if(_mpHostWatchId)return;
+  _mpHostWatchId=setInterval(mpHostWatchdogTick,2000);
+}
+function mpStopHostWatchdog(){
+  if(_mpHostWatchId){clearInterval(_mpHostWatchId);_mpHostWatchId=null;}
+  _mpWatchLastAct=0;
+}
+// Background tabs get their timers throttled hard, so a host who tabbed away
+// can come back to a frozen table. Re-check the moment we're visible again.
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden){_mpWatchLastAct=0;mpHostWatchdogTick();}
+});
 // True from the moment a shooter presses Roll until the reveal write lands.
 // Stops a double-press erasing a decided result — see mpPlayerRoll.
 let _mpRollInFlight=false;
@@ -10892,6 +10948,7 @@ function mpLeaveTable(skipFirebase){
     _mpRoomRef.off('value',_mpRoomListener);
   }
   _mpRoomListener=null;
+  mpStopHostWatchdog();
 
   if(!skipFirebase&&_mpRoomRef){
     if(_mpIsHost){
