@@ -2,47 +2,289 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>C-LO Champs</title>
-
-<!-- ROOT REDIRECT — clochamps.com/  ->  clochamps.com/play/
-     The game itself now lives at /play/index.html. This file exists so that
-     every old link still works: bookmarks, the legacy clogame.github.io URL,
-     social posts, and above all the referral invites already shared as
-     clochamps.com/?ref=UID — applyPendingReferral() reads ?ref= off the URL
-     the GAME loads on, so the query string MUST survive the hop or those
-     invites silently stop crediting.
-     When the Play listing goes live, replace this file with the marketing
-     landing page — and keep the ?ref= forwarding rule below in it. -->
-
-<link rel="canonical" href="https://clochamps.com/play/">
-<meta name="robots" content="noindex">
-<meta name="theme-color" content="#1e56d6">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>C-LO Champs — street dice you can actually play</title>
+<meta name="description" content="Play C-LO (Cee-Lo) street dice free in your browser. Beat the bank, run private tables with your crew, climb from Shorty to Legend. No download, 18+.">
+<link rel="canonical" href="https://clochamps.com/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="C-LO Champs">
+<meta property="og:title" content="C-LO Champs — street dice you can actually play">
+<meta property="og:description" content="Beat the bank, run private tables with your crew, climb the ranks. Free in your browser.">
+<meta property="og:url" content="https://clochamps.com/">
+<meta property="og:image" content="https://clochamps.com/icon-512.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@clochampsapp">
+<meta name="theme-color" content="#0c3b2a">
 <link rel="icon" href="/icon-192.png">
-
-<script>
-  // location.replace, not location.href: replacing the history entry stops the
-  // browser Back button from bouncing the player root -> /play/ -> root forever.
-  // search and hash are carried through verbatim.
-  location.replace('/play/' + location.search + location.hash);
-</script>
-
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@400;600&family=Titan+One&display=swap" rel="stylesheet">
 <style>
-  html,body{height:100%;margin:0}
-  body{
-    background:#1e56d6;
-    color:#f4e9c8;
-    font:600 16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-    display:flex;align-items:center;justify-content:center;
-    text-align:center;padding:24px;
-  }
-  a{color:#fff}
+:root{
+  --felt:#0c3b2a;
+  --felt-deep:#061f16;
+  --gold:#d4a843;
+  --gold-bright:#f0cf7d;
+  --chalk:#f2efe2;
+  --dice-red:#d33c33;
+  --muted:rgba(242,239,226,.62);
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px);-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  background:var(--felt-deep);
+  background-image:
+    radial-gradient(ellipse 110% 70% at 50% 0%, #17553c 0%, var(--felt) 45%, var(--felt-deep) 100%);
+  background-attachment:fixed;
+  color:var(--chalk);
+  font-family:Barlow,system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:17px;
+  line-height:1.6;
+  min-height:100%;
+}
+.wrap{max-width:660px;margin:0 auto;padding:0 22px}
+
+/* ── Hero ───────────────────────────────── */
+header{padding:54px 0 12px;text-align:center}
+.mark{
+  font-family:"Titan One",Bebas Neue,sans-serif;
+  font-size:clamp(46px,13vw,78px);
+  line-height:.92;
+  margin:0;
+  color:var(--gold-bright);
+  text-shadow:0 3px 0 #7d5c14, 0 6px 22px rgba(0,0,0,.55);
+  letter-spacing:.01em;
+}
+.mark span{display:block;font-size:.46em;color:var(--chalk);text-shadow:0 2px 0 rgba(0,0,0,.4);letter-spacing:.16em;margin-top:10px;font-family:"Bebas Neue",sans-serif}
+.pitch{
+  font-size:clamp(19px,4.6vw,23px);
+  margin:22px auto 0;
+  max-width:26ch;
+  color:var(--chalk);
+}
+.pitch b{color:var(--gold-bright);font-weight:600}
+
+/* ── Dice strip ─────────────────────────── */
+.dice{display:flex;gap:12px;justify-content:center;margin:30px 0 4px}
+.die{
+  width:52px;height:52px;border-radius:12px;
+  background:linear-gradient(160deg,#e8554a,#a8231c);
+  box-shadow:inset 0 2px 0 rgba(255,255,255,.35), 0 6px 14px rgba(0,0,0,.45);
+  display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);
+  padding:8px;
+}
+.die i{width:7px;height:7px;border-radius:50%;background:#fff;align-self:center;justify-self:center;display:block}
+.dicecap{text-align:center;font-family:"Bebas Neue",sans-serif;letter-spacing:.22em;font-size:15px;color:var(--gold);margin-top:6px}
+
+/* ── Buttons ────────────────────────────── */
+.cta{
+  display:block;width:100%;text-align:center;
+  margin:30px 0 10px;
+  padding:19px 20px;
+  background:linear-gradient(180deg,var(--gold-bright),var(--gold));
+  color:#2b1d02;
+  font-family:"Bebas Neue",sans-serif;
+  font-size:26px;letter-spacing:.06em;
+  border-radius:14px;text-decoration:none;
+  box-shadow:0 6px 0 #8a6a16, 0 12px 26px rgba(0,0,0,.45);
+  border:0;cursor:pointer;
+}
+.cta:active{transform:translateY(3px);box-shadow:0 3px 0 #8a6a16, 0 8px 18px rgba(0,0,0,.45)}
+.sub{text-align:center;color:var(--muted);font-size:15px;margin:0 0 4px}
+.sub a{color:var(--gold-bright)}
+
+/* ── Sections ───────────────────────────── */
+section{padding:34px 0;border-top:1px solid rgba(212,168,67,.22)}
+h2{
+  font-family:"Bebas Neue",sans-serif;
+  font-size:30px;letter-spacing:.05em;
+  color:var(--gold-bright);margin:0 0 14px;font-weight:400;
+}
+p{margin:0 0 14px}
+.hands{list-style:none;padding:0;margin:0}
+.hands li{display:flex;gap:14px;align-items:baseline;padding:9px 0;border-bottom:1px dashed rgba(242,239,226,.16)}
+.hands li:last-child{border-bottom:0}
+.tag{
+  font-family:"Bebas Neue",sans-serif;font-size:17px;letter-spacing:.08em;
+  min-width:106px;padding:3px 9px;border-radius:7px;text-align:center;
+}
+.win{background:rgba(72,187,120,.16);color:#7ee0a0;border:1px solid rgba(126,224,160,.4)}
+.lose{background:rgba(211,60,51,.16);color:#f08a82;border:1px solid rgba(240,138,130,.4)}
+
+/* ── Waitlist ───────────────────────────── */
+.signup{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+.signup input{
+  flex:1 1 210px;min-width:0;
+  padding:15px 16px;font-size:17px;font-family:inherit;
+  background:rgba(0,0,0,.34);color:var(--chalk);
+  border:1px solid rgba(212,168,67,.45);border-radius:11px;
+}
+.signup input::placeholder{color:rgba(242,239,226,.42)}
+.signup button{
+  flex:0 0 auto;padding:15px 24px;
+  font-family:"Bebas Neue",sans-serif;font-size:20px;letter-spacing:.05em;
+  background:var(--gold);color:#2b1d02;border:0;border-radius:11px;cursor:pointer;
+}
+.signup button[disabled]{opacity:.55;cursor:default}
+.note{font-size:14px;color:var(--muted);margin-top:10px;min-height:1.4em}
+.note.ok{color:#7ee0a0}
+.note.err{color:#f08a82}
+
+/* ── Footer ─────────────────────────────── */
+footer{padding:34px 0 46px;border-top:1px solid rgba(212,168,67,.22);text-align:center}
+.social{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:0 0 20px;padding:0;list-style:none}
+.social a{
+  display:block;padding:9px 15px;
+  font-family:"Bebas Neue",sans-serif;letter-spacing:.09em;font-size:16px;
+  color:var(--chalk);text-decoration:none;
+  border:1px solid rgba(242,239,226,.28);border-radius:9px;
+}
+.social a:hover,.social a:focus-visible{border-color:var(--gold);color:var(--gold-bright)}
+.legal{font-size:13.5px;color:var(--muted);line-height:1.75}
+.legal a{color:var(--muted)}
+.age{
+  display:inline-block;margin-bottom:12px;padding:5px 12px;border-radius:999px;
+  border:1px solid rgba(240,138,130,.5);color:#f08a82;
+  font-family:"Bebas Neue",sans-serif;letter-spacing:.1em;font-size:14px;
+}
+a:focus-visible,button:focus-visible,input:focus-visible{outline:3px solid var(--gold-bright);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
 <body>
-  <noscript>
-    <p>Loading C-LO Champs&hellip;<br>
-    <a href="/play/">Tap here to play</a></p>
-  </noscript>
+<div class="wrap">
+
+  <header>
+    <h1 class="mark">C-LO<span>Champs</span></h1>
+    <div class="dice" aria-hidden="true">
+      <div class="die"><i style="grid-column:1;grid-row:1"></i><i style="grid-column:3;grid-row:1"></i><i style="grid-column:1;grid-row:3"></i><i style="grid-column:3;grid-row:3"></i></div>
+      <div class="die"><i style="grid-column:1;grid-row:1"></i><i style="grid-column:3;grid-row:1"></i><i style="grid-column:2;grid-row:2"></i><i style="grid-column:1;grid-row:3"></i><i style="grid-column:3;grid-row:3"></i></div>
+      <div class="die"><i style="grid-column:1;grid-row:1"></i><i style="grid-column:3;grid-row:1"></i><i style="grid-column:1;grid-row:2"></i><i style="grid-column:3;grid-row:2"></i><i style="grid-column:1;grid-row:3"></i><i style="grid-column:3;grid-row:3"></i></div>
+    </div>
+    <div class="dicecap">4 &middot; 5 &middot; 6</div>
+    <p class="pitch">Street dice with <b>real rules</b>. Beat the bank, run the table, climb the ranks.</p>
+  </header>
+
+  <a class="cta" id="play" href="/play/">Play free in your browser</a>
+  <p class="sub">No download. Works on your phone or laptop. <a href="/how-to-play.html">New to C-LO? Read the rules</a></p>
+
+  <section>
+    <h2>The hands</h2>
+    <ul class="hands">
+      <li><span class="tag win">C-LO</span><span>4, 5, 6 in any order — instant win</span></li>
+      <li><span class="tag win">Headcrack</span><span>Any pair plus a 6 — instant win</span></li>
+      <li><span class="tag win">Trips</span><span>Three of a kind — instant win</span></li>
+      <li><span class="tag lose">Ace</span><span>Any pair plus a 1, or 1-2-3 — instant loss</span></li>
+    </ul>
+    <p style="margin-top:16px">Anything else with a pair sets your point, and the odd die is the number to beat. <a href="/how-to-play.html" style="color:var(--gold-bright)">Full rules</a>.</p>
+  </section>
+
+  <section>
+    <h2>How it plays</h2>
+    <p>The bank rolls first to set a point. You roll to beat it. Higher point takes the money, a tie is a push, and the bank rolls again.</p>
+    <p>Host your own table and you <em>are</em> the bank, covering every shooter who sits down. Or open a private room and pass the code to your crew. Win enough and you move up: Shorty, Hustler, Baller, Shooter, OG, Legend.</p>
+  </section>
+
+  <section>
+    <h2>Get told when the app lands</h2>
+    <p>The Android app is in early access right now. Leave an email and you'll hear from me the day it opens up — nothing else, ever.</p>
+    <div class="signup">
+      <label for="email" style="position:absolute;left:-9999px">Email address</label>
+      <input id="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com">
+      <button id="join" type="button">Notify me</button>
+    </div>
+    <p class="note" id="note" role="status" aria-live="polite"></p>
+  </section>
+
+  <footer>
+    <ul class="social">
+      <li><a href="https://www.instagram.com/clochampsapp/" rel="me noopener">Instagram</a></li>
+      <li><a href="https://www.tiktok.com/@clochampsapp" rel="me noopener">TikTok</a></li>
+      <li><a href="https://x.com/clochampsapp" rel="me noopener">X</a></li>
+      <li><a href="https://www.youtube.com/@clochampsapp" rel="me noopener">YouTube</a></li>
+      <li><a href="https://www.facebook.com/clochampsapp" rel="me noopener">Facebook</a></li>
+    </ul>
+    <div class="age">18+ only</div>
+    <p class="legal">
+      C-LO Champs&trade; is for entertainment only. Chips are virtual, have no cash value, and can never be exchanged for real money or prizes.<br>
+      <a href="/privacy.html">Privacy</a> &nbsp;·&nbsp; <a href="/delete-account.html">Delete your account</a><br>
+      &copy; 2026 161 Technologies LLC
+    </p>
+  </footer>
+
+</div>
+
+<!--
+  WHEN THE PLAY LISTING GOES PUBLIC (production, not Alpha):
+  add a second button under the main CTA —
+  <a class="cta" href="https://play.google.com/store/apps/details?id=com.clochamps.app">Get the Android app</a>
+  Don't add it while the app is closed testing: that URL 404s for the public.
+-->
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
+/* ── Carry ?ref= through to the game ──────────────────────────────
+   Invites are shared as clochamps.com/?ref=UID. The old root file was a
+   redirect that forwarded the query string; this page must do the same or
+   every invite already in the wild stops crediting the referrer. */
+(function(){
+  var q = location.search + location.hash;
+  if(q && q !== '#') document.getElementById('play').href = '/play/' + q;
+})();
+
+/* ── Waitlist ─────────────────────────────────────────────────────
+   Signs in anonymously (same anonymous auth the game uses) and writes one
+   doc per visitor, keyed by uid so a second submit updates instead of
+   piling up. Needs the waitlist rule from firestore-waitlist-rule.txt. */
+(function(){
+  var cfg = {
+    apiKey:"AIzaSyAZn0sohmuLdzzCJNeAcRwwkZarTupWd5s",
+    authDomain:"clo-beat-the-bank.firebaseapp.com",
+    projectId:"clo-beat-the-bank",
+    storageBucket:"clo-beat-the-bank.firebasestorage.app",
+    messagingSenderId:"630310342960",
+    appId:"1:630310342960:web:0bd41fd97ac9ff2b0cf8f5",
+    databaseURL:"https://clo-beat-the-bank-default-rtdb.firebaseio.com"
+  };
+  var btn=document.getElementById('join'), input=document.getElementById('email'), note=document.getElementById('note');
+  function say(msg,cls){ note.textContent=msg; note.className='note'+(cls?' '+cls:''); }
+
+  var app=null;
+  function ready(){
+    if(app) return Promise.resolve();
+    try{ app=firebase.initializeApp(cfg); }catch(e){ app=firebase.app(); }
+    return firebase.auth().signInAnonymously();
+  }
+
+  function submit(){
+    var email=(input.value||'').trim();
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)){ say('That email doesn\u2019t look right \u2014 check it and try again.','err'); input.focus(); return; }
+    btn.disabled=true; say('Saving\u2026');
+    ready().then(function(){
+      var uid=firebase.auth().currentUser.uid;
+      var ref=new URLSearchParams(location.search).get('ref')||null;
+      return firebase.firestore().collection('waitlist').doc(uid).set({
+        email:email, ref:ref, createdAt:Date.now()
+      });
+    }).then(function(){
+      say('You\u2019re on the list. Talk soon.','ok');
+      input.value=''; input.disabled=true;
+    }).catch(function(err){
+      btn.disabled=false;
+      say('That didn\u2019t save. Try again, or email clochamps@gmail.com.','err');
+      console.error('[waitlist]',err);
+    });
+  }
+  btn.addEventListener('click',submit);
+  input.addEventListener('keydown',function(e){ if(e.key==='Enter') submit(); });
+})();
+</script>
 </body>
 </html>
