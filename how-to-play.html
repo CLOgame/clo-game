@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How to play C-LO (Cee-Lo) — street dice rules explained</title>
+<meta name="description" content="The rules of C-LO, the three-dice street game also spelled Cee-Lo. What C-LO, Headcrack, Trips and Ace mean, how points work, how the bank works, and how the street version differs.">
+<link rel="canonical" href="https://clochamps.com/how-to-play.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="C-LO Champs">
+<meta property="og:title" content="How to play C-LO (Cee-Lo) — street dice rules explained">
+<meta property="og:description" content="Three dice, one bank, one shooter. The hands, the points, and how the street version really plays.">
+<meta property="og:url" content="https://clochamps.com/how-to-play.html">
+<meta property="og:image" content="https://clochamps.com/icon-512.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@clochampsapp">
+<meta name="theme-color" content="#0c3b2a">
+<link rel="icon" href="/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@400;600&family=Titan+One&display=swap" rel="stylesheet">
+<style>
+:root{
+  --felt:#0c3b2a; --felt-deep:#061f16; --gold:#d4a843; --gold-bright:#f0cf7d;
+  --chalk:#f2efe2; --muted:rgba(242,239,226,.62);
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+*,*::before,*::after{box-sizing:inherit}
+html{-webkit-text-size-adjust:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+body{
+  margin:0;background:var(--felt-deep);
+  background-image:radial-gradient(ellipse 110% 60% at 50% 0%, #17553c 0%, var(--felt) 42%, var(--felt-deep) 100%);
+  background-attachment:fixed;
+  color:var(--chalk);font-family:Barlow,system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:17px;line-height:1.65;
+}
+.wrap{max-width:660px;margin:0 auto;padding:0 22px}
+.back{display:inline-block;margin:26px 0 0;color:var(--gold-bright);text-decoration:none;font-family:"Bebas Neue",sans-serif;letter-spacing:.1em;font-size:16px}
+h1{
+  font-family:"Titan One",sans-serif;
+  font-size:clamp(31px,7.6vw,44px);line-height:1.08;
+  color:var(--gold-bright);margin:16px 0 6px;
+  text-shadow:0 3px 0 #7d5c14, 0 6px 20px rgba(0,0,0,.5);
+}
+.standfirst{font-size:19px;color:var(--chalk);margin:0 0 4px;max-width:44ch}
+h2{font-family:"Bebas Neue",sans-serif;font-weight:400;font-size:29px;letter-spacing:.05em;color:var(--gold-bright);margin:0 0 12px}
+h3{font-family:"Bebas Neue",sans-serif;font-weight:400;font-size:21px;letter-spacing:.06em;color:var(--chalk);margin:22px 0 6px}
+section{padding:30px 0;border-top:1px solid rgba(212,168,67,.22)}
+section p:last-child{margin-bottom:0}
+p{margin:0 0 14px;max-width:62ch}
+ul.hands{list-style:none;padding:0;margin:0 0 6px}
+ul.hands li{display:flex;gap:13px;align-items:baseline;padding:10px 0;border-bottom:1px dashed rgba(242,239,226,.16)}
+ul.hands li:last-child{border-bottom:0}
+.tag{font-family:"Bebas Neue",sans-serif;font-size:17px;letter-spacing:.08em;min-width:108px;padding:3px 9px;border-radius:7px;text-align:center;flex:0 0 auto}
+.win{background:rgba(72,187,120,.16);color:#7ee0a0;border:1px solid rgba(126,224,160,.4)}
+.lose{background:rgba(211,60,51,.16);color:#f08a82;border:1px solid rgba(240,138,130,.4)}
+.point{background:rgba(212,168,67,.16);color:var(--gold-bright);border:1px solid rgba(212,168,67,.45)}
+.aside{border-left:3px solid var(--gold);padding:4px 0 4px 16px;margin:20px 0;color:var(--chalk)}
+.aside p:last-child{margin-bottom:0}
+.cta{
+  display:block;text-align:center;margin:26px 0 8px;padding:18px 20px;
+  background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:#2b1d02;
+  font-family:"Bebas Neue",sans-serif;font-size:24px;letter-spacing:.06em;
+  border-radius:14px;text-decoration:none;box-shadow:0 6px 0 #8a6a16, 0 12px 24px rgba(0,0,0,.45);
+}
+.cta:active{transform:translateY(3px);box-shadow:0 3px 0 #8a6a16}
+footer{padding:32px 0 46px;border-top:1px solid rgba(212,168,67,.22);text-align:center}
+.social{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:0 0 18px;padding:0;list-style:none}
+.social a{display:block;padding:9px 15px;font-family:"Bebas Neue",sans-serif;letter-spacing:.09em;font-size:16px;color:var(--chalk);text-decoration:none;border:1px solid rgba(242,239,226,.28);border-radius:9px}
+.social a:hover,.social a:focus-visible{border-color:var(--gold);color:var(--gold-bright)}
+.legal{font-size:13.5px;color:var(--muted);line-height:1.75}
+.legal a{color:var(--muted)}
+.age{display:inline-block;margin-bottom:12px;padding:5px 12px;border-radius:999px;border:1px solid rgba(240,138,130,.5);color:#f08a82;font-family:"Bebas Neue",sans-serif;letter-spacing:.1em;font-size:14px}
+a{color:var(--gold-bright)}
+a:focus-visible{outline:3px solid var(--gold-bright);outline-offset:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<a class="back" href="/">&larr; C-LO Champs</a>
+
+<h1>How to play C-LO</h1>
+<p class="standfirst">C-LO is played with three dice. One person holds the bank. Everyone else shoots against them, one at a time.</p>
+<p>You roll all three dice until you get a hand that counts. Some hands win or lose on the spot. Everything else gives you a number, and the higher number takes the money.</p>
+
+<section>
+  <h2>The hands</h2>
+  <ul class="hands">
+    <li><span class="tag win">C-LO</span><span>4, 5, 6 in any order. Instant win, and the roll the game is named after.</span></li>
+    <li><span class="tag win">Headcrack</span><span>Any pair plus a 6. Instant win.</span></li>
+    <li><span class="tag win">Trips</span><span>Three of a kind. Instant win.</span></li>
+    <li><span class="tag lose">Ace</span><span>Any pair plus a 1, or 1-2-3. Instant loss.</span></li>
+    <li><span class="tag point">Point</span><span>A pair plus a 2, 3, 4 or 5. The odd die is your point.</span></li>
+  </ul>
+  <p style="margin-top:14px">No pair and no special hand means nothing happened. Pick the dice up and roll again. You can roll all night until something lands.</p>
+</section>
+
+<section>
+  <h2>Bank against shooter</h2>
+  <p>The bank rolls first and sets a point. Then you roll. Beat their number and you take the bet, lose to it and the bank takes yours. Matching it is a push, nobody pays, and the bank rolls again.</p>
+  <p>An instant win beats anything the bank has. An instant loss ends your hand no matter what the bank rolled.</p>
+  <p>Holding the bank is the real position at the table. You're covering every shooter who sits down, so a good run builds fast and a bad one empties your pockets just as quickly.</p>
+</section>
+
+<section>
+  <h2>Play a hand</h2>
+  <p>C-LO Champs is the street version, free in your browser. No download, no sign-up to start. Play the bank, sit down as a shooter, or open a private room and send the code to your crew.</p>
+  <a class="cta" href="/play/">Play free in your browser</a>
+</section>
+
+<footer>
+  <ul class="social">
+    <li><a href="https://www.instagram.com/clochampsapp/" rel="me noopener">Instagram</a></li>
+    <li><a href="https://www.tiktok.com/@clochampsapp" rel="me noopener">TikTok</a></li>
+    <li><a href="https://x.com/clochampsapp" rel="me noopener">X</a></li>
+    <li><a href="https://www.youtube.com/@clochampsapp" rel="me noopener">YouTube</a></li>
+    <li><a href="https://www.facebook.com/clochampsapp" rel="me noopener">Facebook</a></li>
+  </ul>
+  <div class="age">18+ only</div>
+  <p class="legal">
+    C-LO Champs&trade; is for entertainment only. Chips are virtual, have no cash value, and can never be exchanged for real money or prizes.<br>
+    <a href="/privacy.html">Privacy</a> &nbsp;·&nbsp; <a href="/delete-account.html">Delete your account</a><br>
+    &copy; 2026 161 Technologies LLC
+  </p>
+</footer>
+
+</div>
+
+<script type="application/ld+json">
+{
+  "@context":"https://schema.org",
+  "@type":"FAQPage",
+  "mainEntity":[
+    {"@type":"Question","name":"What is a headcrack in C-LO?",
+     "acceptedAnswer":{"@type":"Answer","text":"In C-LO Champs a headcrack is any pair plus a 6, and it wins instantly."}},
+    {"@type":"Question","name":"What beats what in C-LO?",
+     "acceptedAnswer":{"@type":"Answer","text":"4-5-6 (C-LO), any pair with a 6 (headcrack) and three of a kind all win instantly. A pair with a 1, or 1-2-3, loses instantly. Anything else with a pair sets a point, and the higher point wins."}},
+    {"@type":"Question","name":"How does the bank work in C-LO?",
+     "acceptedAnswer":{"@type":"Answer","text":"One player holds the bank and covers everyone else's bets. The bank rolls first to set a point and each shooter rolls to beat it. Higher point wins, a tie is a push, and the bank rolls again."}},
+    {"@type":"Question","name":"Is C-LO the same game as Cee-Lo?",
+     "acceptedAnswer":{"@type":"Answer","text":"Yes. C-LO, Cee-Lo and See-Low are spellings of the same three-dice game. The name comes from the Chinese si wu liu, meaning four-five-six."}}
+  ]
+}
+</script>
+</body>
+</html>
