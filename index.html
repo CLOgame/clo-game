@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-24b';
+  window.CLO_BUILD = '2026-09-24c';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -6569,7 +6569,16 @@ window._saveProfile=async p=>{
     await _db.runTransaction(async tx=>{
       const snap=await tx.get(ref);
       const out=Object.assign({},p);
+      // NEVER RESEND createdAt ON AN UPDATE (Sep 24).
+      // The update rule allows a write only if createdAt is absent OR equals
+      // the stored value. Stat-only writes (settlement, referral credit) can
+      // create a player doc that never had createdAt at all — and once that
+      // happens, every full profile save compares our string against a field
+      // that does not exist, fails, and the player's chips stop persisting.
+      // createdAt is write-once by definition, so on an existing doc we simply
+      // leave it out and let the stored value stand.
       if(snap.exists){
+        delete out.createdAt;
         const srv=snap.data()||{};
         const owed=(typeof srv.pendingReferralCredit==='number')?srv.pendingReferralCredit:0;
         if(owed>0){
@@ -6585,7 +6594,11 @@ window._saveProfile=async p=>{
     });
   }catch(e){
     console.warn('[_saveProfile] claim txn failed, falling back to plain save:',e);
-    try{await _db.collection('players').doc(_uid).set(p,{merge:true});}catch(e2){console.warn('[_saveProfile] Firestore write failed:',e2);}
+    // Same rule applies here: the fallback has no snapshot to compare against,
+    // so send the payload WITHOUT createdAt. A merge-set leaves any existing
+    // value untouched, and a doc created by this path simply has none.
+    const plain=Object.assign({},p); delete plain.createdAt;
+    try{await _db.collection('players').doc(_uid).set(plain,{merge:true});}catch(e2){console.warn('[_saveProfile] Firestore write failed:',e2);}
   }
 };
 window._updateProfile=async d=>{
