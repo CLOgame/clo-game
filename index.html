@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-24c';
+  window.CLO_BUILD = '2026-09-24d';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -1176,6 +1176,50 @@ html,body{
 }
 .carousel-fade-left{left:0;background:linear-gradient(90deg,rgba(42,90,18,.98) 0%,transparent 100%);}
 .carousel-fade-right{right:0;background:linear-gradient(270deg,rgba(42,90,18,.98) 0%,transparent 100%);}
+
+/* Locked chip pack — see CHIP_LOCKED in the script. Dimmed, no tap. */
+.cs-tier.cs-locked{opacity:.42;filter:grayscale(.65);cursor:default;}
+.cs-tier.cs-locked .cs-buy.locked{
+  background:rgba(255,255,255,.1);
+  color:rgba(255,255,255,.65);
+  border:1px solid rgba(255,255,255,.18);
+  cursor:default;
+  font-size:.72rem;
+  letter-spacing:.06em;
+}
+
+/* ── BETA tag (multiplayer surfaces only: PRIVATE button, LIVE TABLES card
+   and the Live Tables overlay). Single-player rooms are NOT tagged — they
+   are the stable path. Sep 24 2026, ahead of the Sep 29 traffic. ── */
+.beta-tag{
+  display:inline-block;
+  margin-left:5px;
+  padding:1px 5px;
+  border-radius:4px;
+  background:rgba(240,207,125,.16);
+  border:1px solid rgba(240,207,125,.55);
+  color:#f0cf7d;
+  font-family:'Bebas Neue',sans-serif;
+  font-size:.58rem;
+  letter-spacing:.11em;
+  line-height:1.5;
+  vertical-align:middle;
+  white-space:nowrap;
+}
+.lob-btn .beta-tag{
+  position:absolute;
+  top:3px; right:3px;
+  margin-left:0;
+  font-size:.5rem;
+  padding:0 4px;
+}
+.ot-note{
+  text-align:center;
+  color:rgba(240,207,125,.75);
+  font-size:.7rem;
+  font-style:italic;
+  padding:5px 8px 2px;
+}
 
 /* ── LIVE TABLES card (first card in the room carousel) ──
    Distinct from the house rooms: this opens the list of public player-hosted
@@ -5557,6 +5601,7 @@ html,body{
       <button class="lob-btn notif-wrap" onclick="goToPrivateRoom()">
         <span class="lob-btn-icon">👥</span>
         <span class="lob-btn-label">Private</span>
+        <span class="beta-tag">BETA</span>
         <span class="lob-notif green" id="lobby-private-dot" style="display:none;"></span>
       </button>
       <button class="lob-btn notif-wrap" onclick="goToDiceShop()">
@@ -5600,10 +5645,11 @@ html,body{
     <div class="ot-card">
       <div class="ot-head">
         <span class="lot-live-dot"></span>
-        <span class="ot-title">LIVE TABLES</span>
+        <span class="ot-title">LIVE TABLES</span><span class="beta-tag">BETA</span>
         <span class="lot-header-count" id="lot-count" style="font-family:'Bebas Neue',sans-serif;color:#fff;font-size:1.1rem;">0</span>
         <button class="ot-close" onclick="closeOpenTables()">✕</button>
       </div>
+      <div class="ot-note">Multiplayer is in beta — rough edges expected.</div>
       <div class="ot-body" id="lobby-open-tables">
         <div id="lot-list"><div style="text-align:center;color:rgba(207,232,255,.5);font-size:.75rem;padding:8px 4px;font-style:italic;">Loading\u2026</div></div>
       </div>
@@ -7272,6 +7318,20 @@ function goPremium(){showToast('Premium coming soon! 👑');}
 // productId = stable store SKU. Once submitted to Google Play / App Store these
 // strings are PERMANENT (receipts key to them) — change price/chips freely, but
 // never rename an existing productId.
+// LOCKED PACKS (Sep 24 2026 — temporary, for the Sep 29 traffic).
+// Billing is not wired yet, so tapping a pack hands over its chips for FREE.
+// Fine with two testers, NOT fine once strangers arrive: the economy fills up
+// with players holding millions nobody paid for, which makes a nonsense of the
+// first real purchase. Small packs stay live so a busted player can keep
+// playing (150K also still clears the 100K hosting floor); 350K and up show
+// "Coming soon" and do not respond to taps.
+// TO RE-ENABLE: empty this Set, the moment Play Billing is live.
+const CHIP_LOCKED=new Set([
+  'clo_chips_350k','clo_chips_1m','clo_chips_5m','clo_chips_15m',
+  'clo_chips_25m','clo_chips_50m','clo_chips_100m'
+]);
+function chipPackLocked(productId){ return CHIP_LOCKED.has(productId); }
+
 const CHIP_TIERS=[
   {productId:'clo_chips_10k',  price:'0.99', chips:15000,    bonus:null,  label:null,           cls:''        },
   {productId:'clo_chips_60k',  price:'2.99', chips:60000,    bonus:'+20%',label:null,           cls:''        },
@@ -7297,14 +7357,17 @@ function goToChipShop(returnTo){
   if(!grid)return;
   grid.innerHTML='';
   CHIP_TIERS.forEach((t,i)=>{
+    const locked=chipPackLocked(t.productId);
     const card=document.createElement('div');
-    card.className='cs-tier '+t.cls;
+    card.className='cs-tier '+t.cls+(locked?' cs-locked':'');
     card.innerHTML=
-      (t.label?`<div class="cs-badge">${t.label}</div>`:'')+
+      (t.label&&!locked?`<div class="cs-badge">${t.label}</div>`:'')+
       `<div class="cs-chips">${fmtChips(t.chips)}</div>`+
       `<div class="cs-bonus${t.bonus?'':' none'}">${t.bonus||'—'} BONUS</div>`+
-      `<button class="cs-buy">$${t.price}</button>`;
-    card.onclick=()=>buyChips(i);
+      (locked
+        ? `<button class="cs-buy locked" disabled>COMING SOON</button>`
+        : `<button class="cs-buy">$${t.price}</button>`);
+    if(!locked)card.onclick=()=>buyChips(i);
     grid.appendChild(card);
   });
   // ── Remove Ads card (one-time IAP) — spans full width below chip packs ──
@@ -7546,6 +7609,8 @@ function grantRemoveAds(){
 async function buyChips(tierIdx){
   const t=CHIP_TIERS[tierIdx];
   if(!t)return;
+  // Second gate: locked cards have no onclick, but any other caller is refused.
+  if(chipPackLocked(t.productId)){ showToast('That pack is coming soon 🔒'); return; }
   // ── STORE BILLING SWAP-POINT ──────────────────────────────────────────
   // In the native store build, replace the confirmPurchase() block below
   // with a call into the store's billing SDK keyed on t.productId. On the
@@ -11495,7 +11560,7 @@ function buildCarousel(){
   liveCard.id = 'rc-live-tables';
   liveCard.innerHTML = `
     <div class="rc-inner">
-      <div class="rc-live-pulse"><span class="rc-live-dot"></span><span class="rc-live-label">LIVE TABLES</span></div>
+      <div class="rc-live-pulse"><span class="rc-live-dot"></span><span class="rc-live-label">LIVE TABLES</span><span class="beta-tag">BETA</span></div>
       <div class="rc-live-count" id="rc-live-count">${_openTablesCount}</div>
       <div class="rc-live-sub" id="rc-live-sub">Tap to join a live table</div>
       <div class="rc-live-cta">🎲 JOIN A TABLE</div>
