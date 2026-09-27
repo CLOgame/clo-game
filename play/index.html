@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-20c';
+  window.CLO_BUILD = '2026-09-27a';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -1176,6 +1176,52 @@ html,body{
 }
 .carousel-fade-left{left:0;background:linear-gradient(90deg,rgba(42,90,18,.98) 0%,transparent 100%);}
 .carousel-fade-right{right:0;background:linear-gradient(270deg,rgba(42,90,18,.98) 0%,transparent 100%);}
+
+/* Locked chip pack — see CHIP_LOCKED in the script. Dimmed, no tap. */
+.cs-tier.cs-locked{opacity:.42;filter:grayscale(.65);cursor:default;}
+.cs-tier.cs-locked .cs-buy.locked{
+  background:rgba(255,255,255,.1);
+  color:rgba(255,255,255,.65);
+  border:1px solid rgba(255,255,255,.18);
+  cursor:default;
+  font-size:.72rem;
+  letter-spacing:.06em;
+}
+
+/* ── BETA tag (multiplayer surfaces only: PRIVATE button, LIVE TABLES card
+   and the Live Tables overlay). Single-player rooms are NOT tagged — they
+   are the stable path. Sep 24 2026, ahead of the Sep 29 traffic. ── */
+.beta-tag{
+  display:inline-block;
+  margin-left:5px;
+  padding:1px 5px;
+  border-radius:4px;
+  background:rgba(240,207,125,.16);
+  border:1px solid rgba(240,207,125,.55);
+  color:#f0cf7d;
+  font-family:'Bebas Neue',sans-serif;
+  font-size:.58rem;
+  letter-spacing:.11em;
+  line-height:1.5;
+  vertical-align:middle;
+  white-space:nowrap;
+}
+/* Sits UNDER the button label as a normal line. It was absolutely
+   positioned at the button's top-right corner, where the border and the
+   notification dot hid it completely — invisible on both Mac and tablet. */
+.lob-btn .beta-tag{
+  margin-left:0;
+  margin-top:1px;
+  font-size:.55rem;
+  padding:0 5px;
+}
+.ot-note{
+  text-align:center;
+  color:rgba(240,207,125,.75);
+  font-size:.7rem;
+  font-style:italic;
+  padding:5px 8px 2px;
+}
 
 /* ── LIVE TABLES card (first card in the room carousel) ──
    Distinct from the house rooms: this opens the list of public player-hosted
@@ -5557,6 +5603,7 @@ html,body{
       <button class="lob-btn notif-wrap" onclick="goToPrivateRoom()">
         <span class="lob-btn-icon">👥</span>
         <span class="lob-btn-label">Private</span>
+        <span class="beta-tag">BETA</span>
         <span class="lob-notif green" id="lobby-private-dot" style="display:none;"></span>
       </button>
       <button class="lob-btn notif-wrap" onclick="goToDiceShop()">
@@ -5600,10 +5647,11 @@ html,body{
     <div class="ot-card">
       <div class="ot-head">
         <span class="lot-live-dot"></span>
-        <span class="ot-title">LIVE TABLES</span>
+        <span class="ot-title">LIVE TABLES</span><span class="beta-tag">BETA</span>
         <span class="lot-header-count" id="lot-count" style="font-family:'Bebas Neue',sans-serif;color:#fff;font-size:1.1rem;">0</span>
         <button class="ot-close" onclick="closeOpenTables()">✕</button>
       </div>
+      <div class="ot-note">Multiplayer is in beta — rough edges expected.</div>
       <div class="ot-body" id="lobby-open-tables">
         <div id="lot-list"><div style="text-align:center;color:rgba(207,232,255,.5);font-size:.75rem;padding:8px 4px;font-style:italic;">Loading\u2026</div></div>
       </div>
@@ -6569,7 +6617,16 @@ window._saveProfile=async p=>{
     await _db.runTransaction(async tx=>{
       const snap=await tx.get(ref);
       const out=Object.assign({},p);
+      // NEVER RESEND createdAt ON AN UPDATE (Sep 24).
+      // The update rule allows a write only if createdAt is absent OR equals
+      // the stored value. Stat-only writes (settlement, referral credit) can
+      // create a player doc that never had createdAt at all — and once that
+      // happens, every full profile save compares our string against a field
+      // that does not exist, fails, and the player's chips stop persisting.
+      // createdAt is write-once by definition, so on an existing doc we simply
+      // leave it out and let the stored value stand.
       if(snap.exists){
+        delete out.createdAt;
         const srv=snap.data()||{};
         const owed=(typeof srv.pendingReferralCredit==='number')?srv.pendingReferralCredit:0;
         if(owed>0){
@@ -6585,7 +6642,11 @@ window._saveProfile=async p=>{
     });
   }catch(e){
     console.warn('[_saveProfile] claim txn failed, falling back to plain save:',e);
-    try{await _db.collection('players').doc(_uid).set(p,{merge:true});}catch(e2){console.warn('[_saveProfile] Firestore write failed:',e2);}
+    // Same rule applies here: the fallback has no snapshot to compare against,
+    // so send the payload WITHOUT createdAt. A merge-set leaves any existing
+    // value untouched, and a doc created by this path simply has none.
+    const plain=Object.assign({},p); delete plain.createdAt;
+    try{await _db.collection('players').doc(_uid).set(plain,{merge:true});}catch(e2){console.warn('[_saveProfile] Firestore write failed:',e2);}
   }
 };
 window._updateProfile=async d=>{
@@ -7259,6 +7320,20 @@ function goPremium(){showToast('Premium coming soon! 👑');}
 // productId = stable store SKU. Once submitted to Google Play / App Store these
 // strings are PERMANENT (receipts key to them) — change price/chips freely, but
 // never rename an existing productId.
+// LOCKED PACKS (Sep 24 2026 — temporary, for the Sep 29 traffic).
+// Billing is not wired yet, so tapping a pack hands over its chips for FREE.
+// Fine with two testers, NOT fine once strangers arrive: the economy fills up
+// with players holding millions nobody paid for, which makes a nonsense of the
+// first real purchase. Small packs stay live so a busted player can keep
+// playing (150K also still clears the 100K hosting floor); 350K and up show
+// "Coming soon" and do not respond to taps.
+// TO RE-ENABLE: empty this Set, the moment Play Billing is live.
+const CHIP_LOCKED=new Set([
+  'clo_chips_350k','clo_chips_1m','clo_chips_5m','clo_chips_15m',
+  'clo_chips_25m','clo_chips_50m','clo_chips_100m'
+]);
+function chipPackLocked(productId){ return CHIP_LOCKED.has(productId); }
+
 const CHIP_TIERS=[
   {productId:'clo_chips_10k',  price:'0.99', chips:15000,    bonus:null,  label:null,           cls:''        },
   {productId:'clo_chips_60k',  price:'2.99', chips:60000,    bonus:'+20%',label:null,           cls:''        },
@@ -7284,14 +7359,17 @@ function goToChipShop(returnTo){
   if(!grid)return;
   grid.innerHTML='';
   CHIP_TIERS.forEach((t,i)=>{
+    const locked=chipPackLocked(t.productId);
     const card=document.createElement('div');
-    card.className='cs-tier '+t.cls;
+    card.className='cs-tier '+t.cls+(locked?' cs-locked':'');
     card.innerHTML=
-      (t.label?`<div class="cs-badge">${t.label}</div>`:'')+
+      (t.label&&!locked?`<div class="cs-badge">${t.label}</div>`:'')+
       `<div class="cs-chips">${fmtChips(t.chips)}</div>`+
       `<div class="cs-bonus${t.bonus?'':' none'}">${t.bonus||'—'} BONUS</div>`+
-      `<button class="cs-buy">$${t.price}</button>`;
-    card.onclick=()=>buyChips(i);
+      (locked
+        ? `<button class="cs-buy locked" disabled>COMING SOON</button>`
+        : `<button class="cs-buy">$${t.price}</button>`);
+    if(!locked)card.onclick=()=>buyChips(i);
     grid.appendChild(card);
   });
   // ── Remove Ads card (one-time IAP) — spans full width below chip packs ──
@@ -7533,6 +7611,8 @@ function grantRemoveAds(){
 async function buyChips(tierIdx){
   const t=CHIP_TIERS[tierIdx];
   if(!t)return;
+  // Second gate: locked cards have no onclick, but any other caller is refused.
+  if(chipPackLocked(t.productId)){ showToast('That pack is coming soon 🔒'); return; }
   // ── STORE BILLING SWAP-POINT ──────────────────────────────────────────
   // In the native store build, replace the confirmPurchase() block below
   // with a call into the store's billing SDK keyed on t.productId. On the
@@ -8776,6 +8856,24 @@ function mpEnterTable(roomRef,isHost){
     if(_mpIsHost){
       mpHostSeedSeatBalance(room);
       mpHostCheckShooterAdvance(room.round);
+      // ROUND 1 RETRY (Sep 24). The once('value') path below fires EXACTLY
+      // once. If seats had not landed yet at that instant, mpInitRound bailed
+      // ("Everyone has left the table") and nothing ever tried again — the
+      // table sat on "The bank is preparing the table…" forever. Retry from
+      // the listener, which re-fires as seats arrive.
+      // The cooldown matters: without it every snapshot while the round write
+      // is in flight would queue another write, and that cascade is exactly
+      // what buries Firebase's pending-write tree.
+      if(!room.round && room.status==='playing' && room.seats && Object.keys(room.seats).length>0){
+        const now=Date.now();
+        if(!_mpInitRoundAt || now-_mpInitRoundAt>4000){
+          _mpInitRoundAt=now;
+          console.warn('[mp] no round yet — retrying Round 1 init');
+          mpInitRound(1);
+        }
+      }else if(room.round){
+        _mpInitRoundAt=0;
+      }
     }
     mpHandleRoundState(room);
   });
@@ -8788,6 +8886,7 @@ function mpEnterTable(roomRef,isHost){
   // path runs exactly ONCE, that left the table stuck on "ROUND UNDEFINED"
   // with no buttons and no retry. Seeding _mpRoom here closes the race.
   if(_mpIsHost){
+    mpStartHostWatchdog();
     _mpRoomRef.once('value').then(snap=>{
       const room=snap.val();
       if(!room)return;
@@ -9093,6 +9192,61 @@ function mpHostAction(){/* placeholder — replaced by mpSetActionBtn */}
 // Local state for the bet timer (countdown shown in UI + auto-pass watchdog)
 let _mpBetTimerId=null;
 let _mpShooterTimerId=null;
+// HOST WATCHDOG (Sep 24). The per-phase timers above are setIntervals started
+// from mpHandleRoundState — which only runs when a SNAPSHOT arrives. When a
+// shooter's device drops (airplane mode, dead signal) nothing writes, so no
+// snapshots arrive, so nothing re-evaluates. Worse, Chrome throttles intervals
+// in BACKGROUND tabs to roughly once a minute, so the host tab sitting behind
+// another window effectively stops rescuing at all. Result: table frozen on
+// "X's turn" with an expired deadline and no way back.
+// This watchdog runs for as long as the host is in a room, re-reads the
+// deadlines from _mpRoom every tick (never from a stale closure), and also
+// fires immediately when the tab becomes visible again.
+let _mpHostWatchId=null;
+let _mpWatchLastAct=0;
+function mpHostWatchdogTick(){
+  if(!_mpIsHost||!_mpRoom||!_mpRoomRef)return;
+  const r=_mpRoom.round;
+  if(!r)return;
+  const now=Date.now();
+  // Don't hammer: one rescue attempt every 3s at most.
+  if(now-_mpWatchLastAct<3000)return;
+  // GRACE: 3s past the deadline, so the shooter's own device gets first shot.
+  if(r.phase==='player-rolls'&&r.shooterDeadline&&now>r.shooterDeadline+3000){
+    const q=r.shooterQueue||[];
+    const uid=q[r.currentShooterIdx||0];
+    if(uid&&uid!==_mpMyUid){
+      const b=(r.bets||{})[uid];
+      if(b&&b.dice&&b.resultType){
+        // They DID roll — the advance just never landed. Nudge it.
+        _mpWatchLastAct=now;
+        console.warn('[mp watchdog] shooter resolved but round stalled — advancing');
+        mpHostAdvanceShooter();
+      }else{
+        _mpWatchLastAct=now;
+        console.warn('[mp watchdog] shooter deadline blown — force-rolling',uid);
+        mpHostForceRollFor(uid);
+      }
+    }
+  }else if(r.phase==='betting'&&r.bettingDeadline&&now>r.bettingDeadline+3000){
+    _mpWatchLastAct=now;
+    console.warn('[mp watchdog] betting deadline blown — closing betting');
+    mpHostFinalizeBetting(r);   // takes the round object
+  }
+}
+function mpStartHostWatchdog(){
+  if(_mpHostWatchId)return;
+  _mpHostWatchId=setInterval(mpHostWatchdogTick,2000);
+}
+function mpStopHostWatchdog(){
+  if(_mpHostWatchId){clearInterval(_mpHostWatchId);_mpHostWatchId=null;}
+  _mpWatchLastAct=0;
+}
+// Background tabs get their timers throttled hard, so a host who tabbed away
+// can come back to a frozen table. Re-check the moment we're visible again.
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden){_mpWatchLastAct=0;mpHostWatchdogTick();}
+});
 // True from the moment a shooter presses Roll until the reveal write lands.
 // Stops a double-press erasing a decided result — see mpPlayerRoll.
 let _mpRollInFlight=false;
@@ -9809,7 +9963,10 @@ function mpRenderShooterArea(round,state){
     // replay-on-every-sync bug). Keyed by round + my uid + dice so a genuinely
     // new roll re-arms it.
     if(isMe&&(cls==='win'||cls==='lose'||cls==='push')){
-      mpPlayResultSound('shooter:'+(_mpRoom&&_mpRoom.round&&_mpRoom.round.number)+':'+_mpMyUid+':'+(state.dice||[]).join(''),cls);
+      // A push shares ONE key per round with the settlement-side push below,
+      // so rolling your own push no longer plays the push sound twice.
+      const _rn=(_mpRoom&&_mpRoom.round&&_mpRoom.round.number)||0;
+      mpPlayResultSound(cls==='push'?('push:'+_rn+':'+_mpMyUid):('shooter:'+_rn+':'+_mpMyUid+':'+(state.dice||[]).join('')),cls);
     }
     // Keep the on-felt label cleared.
     if(label){label.textContent='';label.className='mp-shooter-label';}
@@ -10105,7 +10262,7 @@ function mpRenderSettlementPhase(room,round){
         // you rolled yourself; this covers the rest (bank point matched, no
         // callout of your own), keyed per round so a listener re-fire cannot
         // replay it.
-        mpPlayResultSound('settle:'+(round.number||0)+':'+_mpMyUid+':push','push');
+        mpPlayResultSound('push:'+(round.number||0)+':'+_mpMyUid,'push');
       }else{
         mpSetMsg('');
       }
@@ -10434,6 +10591,7 @@ function mpAnimateBankShaking(){
 // (e.g. a player placing a bet, or rolling their own dice — those events
 // fire the room listener, which re-runs render. Without this cache the
 // bank dice would tumble in mid-air every time a player did anything).
+let _mpInitRoundAt=0;   // throttle for the Round 1 retry above
 let _mpLastBankDiceKey=null;
 let _mpLastPhaseKey=null;  // Sub-step B: tracks phase transitions for one-shot dice cleanup
 let _mpLastSoundKey=null;  // legacy single-slot marker, still used by the
@@ -10870,6 +11028,7 @@ function mpLeaveTable(skipFirebase){
     _mpRoomRef.off('value',_mpRoomListener);
   }
   _mpRoomListener=null;
+  mpStopHostWatchdog();
 
   if(!skipFirebase&&_mpRoomRef){
     if(_mpIsHost){
@@ -10890,22 +11049,46 @@ function mpLeaveTable(skipFirebase){
       // no seat dropped, host waiting forever on a player who had gone.
       const roomRef=_mpRoomRef;
       const myUid=_mpMyUid;
-      roomRef.child('seats').once('value').then(snap=>{
-        const seats=snap.val()||{};
+      roomRef.once('value').then(snap=>{
+        const serverRoom=snap.val()||{};
+        const seats=serverRoom.seats||{};
         let mine;
         for(const k in seats){if(seats[k]&&seats[k].uid===myUid){mine=k;break;}}
-        if(forfeit>0){
+        // SERVER-TRUTH GATE (Sep 24). `forfeit` above comes from _mpRoom —
+        // the LEAVING client's local copy. A player whose connection died
+        // (airplane mode, tunnel, dead wifi) holds a stale room: their bet
+        // still reads 'pending' or the phase still reads 'betting', so
+        // mpBetAtRiskAmount() returned 0 and we fell into the no-risk branch
+        // below, which wrote status:'pass' + amount:0 straight OVER a bet the
+        // host had already force-rolled as a LOSS. Settlement only pays bets
+        // with status==='bet', so the hand silently vanished and the player
+        // kept chips they had lost. Decide from the server copy instead, and
+        // never touch a bet that is already resolved.
+        const svrBet=(serverRoom.round&&serverRoom.round.bets&&serverRoom.round.bets[myUid])||null;
+        const svrPhase=(serverRoom.round&&serverRoom.round.phase)||'';
+        const RISK=['pre-roll','bank-rolling','bank-result','player-rolls'];
+        const alreadyResolved=!!(svrBet&&(svrBet.resultType||svrBet.forced||svrBet.status==='forfeit'));
+        const svrForfeit=(!alreadyResolved&&svrBet&&svrBet.status==='bet'&&svrBet.amount>0
+                          &&RISK.indexOf(svrPhase)>=0) ? svrBet.amount : 0;
+        if(alreadyResolved){
+          // Host already settled this hand's outcome. Drop the seat ONLY —
+          // leave the bet exactly as it stands so settlement still applies it.
+          const updates={};
+          if(mine!==undefined)updates['seats/'+mine]=null;
+          if(Object.keys(updates).length){
+            roomRef.update(updates).catch(e=>console.warn('[mp] leave seat drop failed',e));
+          }
+        }else if(svrForfeit>0){
           // Pay the forfeit to the bank's bankroll, then mark the bet as
           // already resolved so host settlement leaves it alone. We also
           // pre-write dice + resultType so that if the player was in the
           // shooter queue, the host's listener sees a "resolved" current
           // shooter and advances the queue past them naturally. Use a
           // single multi-path update so it's atomic-ish.
-          roomRef.once('value').then(rs=>{
-            const room=rs.val()||{};
-            const bankrollBefore=room.bankroll||0;
+          {
+            const bankrollBefore=serverRoom.bankroll||0;
             const updates={};
-            updates['bankroll']=bankrollBefore+forfeit;
+            updates['bankroll']=bankrollBefore+svrForfeit;
             updates['round/bets/'+myUid+'/status']='forfeit';
             updates['round/bets/'+myUid+'/resultType']='lose';
             updates['round/bets/'+myUid+'/forfeitedAt']=Date.now();
@@ -10917,7 +11100,7 @@ function mpLeaveTable(skipFirebase){
             updates['round/bets/'+myUid+'/shooting']=false;
             if(mine!==undefined)updates['seats/'+mine]=null;
             roomRef.update(updates).catch(e=>console.warn('[mp] leave forfeit write failed',e));
-          }).catch(e=>console.warn('[mp] leave forfeit read failed',e));
+          }
         }else{
           // No chips at risk — but the seat STILL has to be cleared out of the
           // round, not just out of the seat list. Previously this branch only
@@ -10927,13 +11110,14 @@ function mpLeaveTable(skipFirebase){
           // all-bets-in check can complete, and drop the seat in the same
           // update so both land together.
           const updates={};
+          // Only write a pass over an UNRESOLVED bet (guarded above).
           updates['round/bets/'+myUid+'/status']='pass';
           updates['round/bets/'+myUid+'/amount']=0;
           updates['round/bets/'+myUid+'/leftAt']=Date.now();
           if(mine!==undefined)updates['seats/'+mine]=null;
           roomRef.update(updates).catch(e=>console.warn('[mp] leave pass write failed',e));
         }
-      }).catch(e=>console.warn('[mp] leave seats read failed',e));
+      }).catch(e=>console.warn('[mp] leave room read failed',e));
     }
   }
 
@@ -11378,7 +11562,7 @@ function buildCarousel(){
   liveCard.id = 'rc-live-tables';
   liveCard.innerHTML = `
     <div class="rc-inner">
-      <div class="rc-live-pulse"><span class="rc-live-dot"></span><span class="rc-live-label">LIVE TABLES</span></div>
+      <div class="rc-live-pulse"><span class="rc-live-dot"></span><span class="rc-live-label">LIVE TABLES</span><span class="beta-tag">BETA</span></div>
       <div class="rc-live-count" id="rc-live-count">${_openTablesCount}</div>
       <div class="rc-live-sub" id="rc-live-sub">Tap to join a live table</div>
       <div class="rc-live-cta">🎲 JOIN A TABLE</div>
