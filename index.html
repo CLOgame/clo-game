@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-24d';
+  window.CLO_BUILD = '2026-09-27a';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -1206,12 +1206,14 @@ html,body{
   vertical-align:middle;
   white-space:nowrap;
 }
+/* Sits UNDER the button label as a normal line. It was absolutely
+   positioned at the button's top-right corner, where the border and the
+   notification dot hid it completely — invisible on both Mac and tablet. */
 .lob-btn .beta-tag{
-  position:absolute;
-  top:3px; right:3px;
   margin-left:0;
-  font-size:.5rem;
-  padding:0 4px;
+  margin-top:1px;
+  font-size:.55rem;
+  padding:0 5px;
 }
 .ot-note{
   text-align:center;
