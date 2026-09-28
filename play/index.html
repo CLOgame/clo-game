@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-27b';
+  window.CLO_BUILD = '2026-09-28a';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -5363,6 +5363,10 @@ html,body{
      dice-shop name size a touch. */
   .ds-tier .ds-name{font-size: .95rem !important;}
 }  /* end phone-landscape pass */
+
+/* Trailing spacer width comes from rcSizeSpacers() via --rc-endpad. Declared
+   last so it wins over the phone media query's !important flex-basis. */
+.room-carousel::after{flex-basis:var(--rc-endpad,calc(50% - 170px)) !important;}
 </style>
 </head>
 <body>
@@ -9211,10 +9215,32 @@ let _mpWatchLastAct=0;
    left, the green page background showed down the right edge, and ULTRA VIP
    ended up somewhere taps no longer matched. scrollTo on the carousel can
    never move the page. Sep 27 2026. */
+/* The carousel's leading padding and trailing spacer must each equal half the
+   viewport minus half a CARD, or the first/last card can never reach dead
+   centre. They were hardcoded for a 340px card (calc(50% - 170px)), but the
+   card is sized from the viewport, so on a wide screen ULTRA VIP — the last
+   card — always stopped short and stayed un-selectable. Measure the real card
+   and set both from it. Sep 27 2026. */
+function rcSizeSpacers(car){
+  if(!car)return;
+  const card=car.querySelector('.rc-card');
+  if(!card||!card.offsetWidth)return;
+  const pad=Math.max(0,(car.clientWidth-card.offsetWidth)/2);
+  car.style.setProperty('padding-left',pad+'px','important');
+  car.style.setProperty('--rc-endpad',pad+'px');
+}
+window.addEventListener('resize',()=>{
+  const car=document.getElementById('room-carousel');
+  if(!car)return;
+  rcSizeSpacers(car);
+  const act=car.querySelector('.rc-card.active');
+  if(act)rcCenterCard(act);
+});
 function rcCenterCard(card){
   if(!card)return;
   const car=card.parentElement;
   if(!car)return;
+  rcSizeSpacers(car);
   const max=Math.max(0,car.scrollWidth-car.clientWidth);
   const target=Math.max(0,Math.min(max,
     card.offsetLeft-car.clientWidth/2+card.offsetWidth/2));
@@ -13701,7 +13727,7 @@ function updateTopChips(){
   if(_profile){_profile.balance=balance;saveLocalProfile(_profile);}
 }
 
-function showCallout(txt){
+function showCallout(txt,who){
   const ov=document.getElementById('callout');
   const lb=document.getElementById('callout-text');
   lb.textContent=txt;
@@ -13710,7 +13736,13 @@ function showCallout(txt){
   // styling — even though the player wins money, the headline event is
   // a failure, so it gets the lose treatment for visual consistency.
   lb.classList.remove('t-clo','t-win','t-lose','t-point');
-  if(txt.includes('C-LO'))                                                lb.classList.add('t-clo');
+  // BANK INSTANT WINS are always red. The bank rolling C-LO / Headcrack /
+  // Trips is a loss for the player, but the text-matching below would paint
+  // it gold/green like the player's own win. Callers pass who='bank' for
+  // that one case, and it overrides the hand-name colors. Every other call
+  // omits it, so player wins and all other callouts are unchanged.
+  if(who==='bank')                                                         lb.classList.add('t-lose');
+  else if(txt.includes('C-LO'))                                           lb.classList.add('t-clo');
   else if(txt.includes('Headcrack')||txt.includes('Trips')||
           txt.includes('Beats'))                                          lb.classList.add('t-win');
   else if(txt.includes('Ace')||txt.includes('loses')||
@@ -13927,7 +13959,7 @@ function rollBank(){
     else{setBankBadge('Point: '+hand.point+' ('+vals.join('-')+')','point');}
 
     if(hand.type==='win'){
-      soundLose();showCallout(hand.label);
+      soundLose();showCallout(hand.label,'bank');
       glowFeltDice('b','lose');
       // Money only — showCallout(hand.label) above already prints the hand.
       setFeltMsg('-$'+bet.toLocaleString(),'lose');
