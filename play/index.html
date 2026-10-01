@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-28a';
+  window.CLO_BUILD = '2026-09-28b';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -5367,6 +5367,54 @@ html,body{
 /* Trailing spacer width comes from rcSizeSpacers() via --rc-endpad. Declared
    last so it wins over the phone media query's !important flex-basis. */
 .room-carousel::after{flex-basis:var(--rc-endpad,calc(50% - 170px)) !important;}
+
+/* ══════════════════════════════════════════════════════════════════════ */
+/*  FREE ROLL — SHORT LANDSCAPE VIEWPORT (phone browsers)                 */
+/*  In a phone browser the URL bar eats ~15% of an already short          */
+/*  landscape screen (~340px tall). The felt flexes to fill whatever is   */
+/*  left, so the fix is to give it more: shrink the fixed-height top bar  */
+/*  (base height is clamp(56px,9vh,68px) and no other block resets it)    */
+/*  and the payout strip. Placed LAST in the stylesheet with the same     */
+/*  #screen-freeroll specificity as the blocks above, so it wins only on  */
+/*  short landscape screens; laptops and tall screens are untouched.      */
+/* ══════════════════════════════════════════════════════════════════════ */
+@media (orientation:landscape) and (max-height:460px){
+  #screen-freeroll .fr-top-bar{
+    height:auto !important;
+    min-height:0 !important;
+    padding:2px 16px !important;
+  }
+  #screen-freeroll .fr-top-title{font-size:1.05rem !important;}
+  #screen-freeroll .fr-top-bal{
+    font-size:.9rem !important;
+    padding:2px 10px !important;
+    border-radius:12px !important;
+  }
+  #screen-freeroll .fr-prize-strip{
+    padding:2px 8px !important;
+    gap:4px !important;
+  }
+  #screen-freeroll .fr-prize-chip{
+    padding:1px 8px !important;
+    border-width:1px !important;
+    border-radius:6px !important;
+  }
+  #screen-freeroll .fpc-hand{font-size:.6rem !important;letter-spacing:.03em !important;}
+  #screen-freeroll .fpc-amt{font-size:.85rem !important;margin-top:0 !important;line-height:1 !important;}
+  #screen-freeroll .fr-rolls-note{font-size:.72rem !important;margin-top:2px !important;}
+}
+/* Wide phones (>=901px) use the in-flow bottom bar from the desktop block,
+   so trimming it here also hands its height to the felt. Narrower phones
+   keep their fixed bottom bar and 70px table clearance as they are. */
+@media (orientation:landscape) and (max-height:460px) and (min-width:901px){
+  #screen-freeroll .fr-bottom-bar{padding:0 28px 4px !important;}
+  #screen-freeroll .fr-shake-wrap{margin:1px 0 !important;}
+  #screen-freeroll .fr-roll-btn{padding:8px 24px !important;font-size:1.05rem !important;}
+  #screen-freeroll .fr-skip-btn,
+  #screen-freeroll .fr-ad-btn,
+  #screen-freeroll .fr-buy-btn{padding:7px 16px !important;font-size:.9rem !important;}
+}
+
 </style>
 </head>
 <body>
