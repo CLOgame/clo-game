@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-04c';
+  window.CLO_BUILD = '2026-10-04d';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -6682,6 +6682,16 @@ function enterOfflineMode(){
 // adds the owed amount to it. No double counting, no stomping.
 let _referralClaimAt=0,_referralClaimBusy=false,_referralClaimPromise=null;
 const SERVER_OWNED_FIELDS=['pendingReferralCredit','referralsCredited','createdAt'];
+// Repaint every on-screen chip count from `balance`. updateTopChips() only
+// covers the in-game pill, so a balance change that lands while the LOBBY is
+// showing (a referral claim, a held rank-up bonus) used to update the money
+// but leave the lobby's chip pill on the old number until the next render.
+function _refreshChipDisplays(){
+  try{ if(typeof updateTopChips==='function')updateTopChips(); }catch(_){}
+  const v=(balance||0).toLocaleString();
+  const lc=document.getElementById('lobby-chips'); if(lc)lc.textContent=v;
+  const lb=document.getElementById('lobby-balance'); if(lb)lb.textContent='$'+v;
+}
 function _stripServerOwned(p,keepCreatedAt){
   const out=Object.assign({},p);
   SERVER_OWNED_FIELDS.forEach(k=>{ if(k==='createdAt'&&keepCreatedAt)return; delete out[k]; });
@@ -6745,7 +6755,7 @@ async function _doClaimReferralCredit(){
       if(typeof claimed.credited==='number')_profile.referralsCredited=claimed.credited;
       balance=claimed.newBal;
       saveLocalProfile(_profile);
-      try{ if(typeof updateTopChips==='function')updateTopChips(); }catch(_){}
+      _refreshChipDisplays();
       try{ if(typeof showToast==='function')showToast('🎁 +'+claimed.owed.toLocaleString()+' referral bonus from your crew!'); }catch(_){}
       console.log('[referral] claimed',claimed.owed);
     }
@@ -7361,7 +7371,7 @@ function creditPendingTierBonus(){
   _profile.pendingTierBonus=0;
   saveLocalProfile(_profile);
   if(window._updateProfile)window._updateProfile({balance:_profile.balance,pendingTierBonus:0}).catch(()=>{});
-  try{ updateTopChips&&updateTopChips(); }catch(_){}
+  _refreshChipDisplays();
   console.log('[rank-up] paid held bonus',owed);
 }
 function flushPendingRankUp(){
