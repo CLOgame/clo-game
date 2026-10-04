@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-09-28b';
+  window.CLO_BUILD = '2026-10-04a';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -1174,8 +1174,19 @@ html,body{
 .carousel-fade-left,.carousel-fade-right{
   position:absolute;top:0;bottom:0;width:160px;z-index:3;pointer-events:none;
 }
-.carousel-fade-left{left:0;background:linear-gradient(90deg,rgba(42,90,18,.98) 0%,transparent 100%);}
-.carousel-fade-right{right:0;background:linear-gradient(270deg,rgba(42,90,18,.98) 0%,transparent 100%);}
+/* GREEN EDGES FIX (2026-10-04a). These overlays were painted a fixed felt green,
+   rgba(42,90,18), left over from when the lobby background was green. The
+   lobby is blue now, so they showed as green strips down both sides. Instead
+   of matching a colour, the carousel itself now fades out at its edges with
+   a mask, so side cards dissolve into whatever background is behind them,
+   on any device and any lobby colour. The overlay divs are kept in the
+   markup but hidden. The arrows are siblings of .room-carousel, not
+   children, so the mask never touches them. */
+.carousel-fade-left,.carousel-fade-right{display:none !important;}
+.room-carousel{
+  -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 160px,#000 calc(100% - 160px),transparent 100%);
+          mask-image:linear-gradient(90deg,transparent 0,#000 160px,#000 calc(100% - 160px),transparent 100%);
+}
 
 /* Locked chip pack — see CHIP_LOCKED in the script. Dimmed, no tap. */
 .cs-tier.cs-locked{opacity:.42;filter:grayscale(.65);cursor:default;}
