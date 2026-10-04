@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-04b';
+  window.CLO_BUILD = '2026-10-04c';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -7308,9 +7308,22 @@ function checkTierUp(){
   if(currentIdx<=lastIdx)return;
   // Player climbed — celebrate the highest new tier reached
   const newTier=STATUS_TIERS[currentIdx];
-  // Award bonus chips for the tier reached
+  // Award bonus chips for the tier reached.
+  // AT A MULTIPLAYER TABLE the bonus is HELD, not added (fixed Oct 4 2026).
+  // At an MP table the purse is owned by the table: every round, settlement
+  // sets balance from room.bankroll (host) or the seat balance (player). A
+  // bonus added straight to `balance` mid-table was therefore wiped by the
+  // very next settlement, and the player never got it. Now it waits in
+  // _profile.pendingTierBonus (saved with the profile, so it survives a
+  // crash) and is paid by creditPendingTierBonus() on return to the lobby.
   const bonus=newTier.bonus||0;
-  if(bonus>0){
+  const mpEl=document.getElementById('screen-mp-game');
+  const inMp=(mpEl&&mpEl.classList.contains('active'))||(typeof _mpMyUid!=='undefined'&&!!_mpMyUid);
+  if(bonus>0&&inMp){
+    _profile.pendingTierBonus=(_profile.pendingTierBonus||0)+bonus;
+    saveLocalProfile(_profile);
+    if(window._updateProfile)window._updateProfile({pendingTierBonus:_profile.pendingTierBonus}).catch(()=>{});
+  }else if(bonus>0){
     balance=(balance||0)+bonus;
     _profile.balance=balance;
     if(window._updateProfile)window._updateProfile({balance:_profile.balance}).catch(()=>{});
@@ -7335,6 +7348,22 @@ function checkTierUp(){
 
 // Queued rank-up celebration (deferred from mid-game). Surfaced at walk-away.
 let _pendingRankUp=null;
+// Pay a rank-up bonus that was held while the player sat at a multiplayer
+// table (see checkTierUp). Only ever runs away from a table, after the table
+// has handed the purse back, so the bonus lands on the real balance.
+function creditPendingTierBonus(){
+  if(!_profile)return;
+  const owed=_profile.pendingTierBonus||0;
+  if(owed<=0)return;
+  if(typeof _mpMyUid!=='undefined'&&_mpMyUid)return;   // still at a table
+  balance=(_profile.balance||0)+owed;
+  _profile.balance=balance;
+  _profile.pendingTierBonus=0;
+  saveLocalProfile(_profile);
+  if(window._updateProfile)window._updateProfile({balance:_profile.balance,pendingTierBonus:0}).catch(()=>{});
+  try{ updateTopChips&&updateTopChips(); }catch(_){}
+  console.log('[rank-up] paid held bonus',owed);
+}
 function flushPendingRankUp(){
   if(!_pendingRankUp)return;
   const p=_pendingRankUp;
@@ -7883,6 +7912,8 @@ function goToFreeRoll(){
 }
 function goToLobby(){
   if(_profile)balance=_profile.balance||10000;
+  // Pay any rank-up bonus held while at a multiplayer table.
+  try{ creditPendingTierBonus(); }catch(_){}
   showScreen('lobby');renderLobby();
   // Back in the lobby means no table is mid-hand: a safe moment to pick up a
   // referral bonus. Throttled to once a minute inside the function.
