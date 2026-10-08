@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-08a';
+  window.CLO_BUILD = '2026-10-08b';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -1046,8 +1046,11 @@ html,body{
 .install-pill.show{display:inline-flex;}
 .install-pill:active{transform:translateY(2px);box-shadow:0 1px 0 #6a4800;}
 @keyframes installPulse{0%,100%{filter:brightness(1);}50%{filter:brightness(1.15);}}
+/* Phone landscape: the top bar is already full, so the pill is icon-only
+   (📲) and the chips pill keeps its room. Label shows on wider screens. */
 @media (max-width:1000px) and (orientation:landscape){
-  .install-pill{padding:5px 9px;font-size:.85rem;}
+  .install-pill{padding:5px 8px;font-size:.95rem;gap:0;border-radius:10px;}
+  .install-pill .ip-label{display:none;}
 }
 
 /* ── Room Carousel ── */
@@ -5715,7 +5718,7 @@ html,body{
     <!-- Chips right -->
     <div class="lobby-chips-section">
       <button class="install-pill" id="install-pill" onclick="promptInstall()" aria-label="Install C-LO Champs">
-        <span>📲</span><span>Install</span>
+        <span>📲</span><span class="ip-label">Install</span>
       </button>
       <div class="currency-pill">
         <div class="currency-icon">💰</div>
