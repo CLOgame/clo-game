@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-04d';
+  window.CLO_BUILD = '2026-10-08a';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -50,6 +50,24 @@
       navigator.serviceWorker.register('/sw.js').catch(function () {});
     });
   }
+  // ADD TO HOME SCREEN (2026-10-08a). Chrome fires beforeinstallprompt once
+  // the site qualifies as installable (HTTPS + manifest + service worker).
+  // It fires EARLY, often before the main script block has parsed, so the
+  // listener lives up here. We stash the event and the lobby shows an
+  // "Install" pill that calls prompt() on it. Chrome never fires this inside
+  // the Play app, an already-installed PWA, or iOS Safari, so the pill simply
+  // never appears there. Dismissing Chrome's sheet hides the pill for 7 days.
+  window._installPromptEvt = null;
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();               // keep Chrome's own mini-bar from showing
+    window._installPromptEvt = e;
+    try { if (typeof refreshInstallPill === 'function') refreshInstallPill(); } catch (_) {}
+  });
+  window.addEventListener('appinstalled', function () {
+    window._installPromptEvt = null;
+    try { if (typeof refreshInstallPill === 'function') refreshInstallPill(); } catch (_) {}
+    try { if (typeof showToast === 'function') showToast('\ud83c\udfb2 Installed! Open C-LO Champs from your home screen'); } catch (_) {}
+  });
 </script>
 
 <!-- Apple touch icon (iOS uses this for the home screen icon when added via
@@ -1013,6 +1031,24 @@ html,body{
 
 /* Chips */
 .lobby-chips-section{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+/* Install pill — see the beforeinstallprompt block in the head. Hidden by
+   default; refreshInstallPill() shows it only when Chrome has offered the
+   install event and the player hasn't dismissed it in the last 7 days. */
+.install-pill{
+  display:none;align-items:center;gap:6px;
+  background:linear-gradient(135deg,#f2cc6e,#d4a843 55%,#b8882a);
+  color:#1a0800;border:none;border-radius:12px;cursor:pointer;
+  padding:7px 12px;font-family:'Bebas Neue',sans-serif;
+  font-size:1rem;letter-spacing:.08em;white-space:nowrap;
+  box-shadow:0 3px 0 #6a4800,0 4px 14px rgba(212,168,67,.35);
+  animation:installPulse 2.4s ease-in-out infinite;
+}
+.install-pill.show{display:inline-flex;}
+.install-pill:active{transform:translateY(2px);box-shadow:0 1px 0 #6a4800;}
+@keyframes installPulse{0%,100%{filter:brightness(1);}50%{filter:brightness(1.15);}}
+@media (max-width:1000px) and (orientation:landscape){
+  .install-pill{padding:5px 9px;font-size:.85rem;}
+}
 
 /* ── Room Carousel ── */
 .room-carousel-wrap{
@@ -5678,6 +5714,9 @@ html,body{
 
     <!-- Chips right -->
     <div class="lobby-chips-section">
+      <button class="install-pill" id="install-pill" onclick="promptInstall()" aria-label="Install C-LO Champs">
+        <span>📲</span><span>Install</span>
+      </button>
       <div class="currency-pill">
         <div class="currency-icon">💰</div>
         <div class="currency-val" id="lobby-chips">10,000</div>
@@ -7122,6 +7161,38 @@ document.addEventListener('visibilitychange',()=>{
 window.addEventListener('pagehide',()=>{
   if(_profile){ _profile.balance=balance; saveLocalProfile(_profile); }
 });
+// ── Add to Home Screen pill (2026-10-08a) ──────────────────────────────
+// Companion to the beforeinstallprompt listener in the head. The pill shows
+// only when Chrome has handed us an install event AND the player hasn't
+// dismissed the sheet within the last 7 days. WHEN THE PLAY LISTING IS
+// PUBLIC: swap the body of promptInstall() for a window.open on the store URL
+// (and drop the _installPromptEvt gate) to send Android players to Play.
+const INSTALL_DISMISS_KEY='clo_install_dismissed_at';
+const INSTALL_DISMISS_MS=7*24*60*60*1000;
+function refreshInstallPill(){
+  const pill=document.getElementById('install-pill');
+  if(!pill)return;
+  let dismissed=0;
+  try{ dismissed=parseInt(localStorage.getItem(INSTALL_DISMISS_KEY)||'0',10)||0; }catch(_){}
+  const standalone=window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches;
+  const show=!!window._installPromptEvt&&!standalone&&(Date.now()-dismissed>INSTALL_DISMISS_MS);
+  pill.classList.toggle('show',show);
+}
+async function promptInstall(){
+  const evt=window._installPromptEvt;
+  if(!evt){ refreshInstallPill(); return; }
+  try{
+    evt.prompt();
+    const choice=await evt.userChoice;   // {outcome:'accepted'|'dismissed'}
+    if(choice&&choice.outcome==='dismissed'){
+      try{ localStorage.setItem(INSTALL_DISMISS_KEY,String(Date.now())); }catch(_){}
+    }
+  }catch(_){}
+  // The event is single-use either way; Chrome fires a fresh one later if
+  // the player still qualifies.
+  window._installPromptEvt=null;
+  refreshInstallPill();
+}
 function showToast(msg,dur=2500){
   let t=document.getElementById('toast');
   if(!t){
@@ -11643,6 +11714,7 @@ const ROOM_THEMES = {
 let _selectedRoom = null;
 
 async function renderLobby(){
+  try{ refreshInstallPill(); }catch(_){}
   if(!_profile) return;
   const p = _profile;
   const status = getStatus(p.totalEarned||0);
