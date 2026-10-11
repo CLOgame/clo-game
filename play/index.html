@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-08b';
+  window.CLO_BUILD = '2026-10-11a';
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -8345,7 +8345,18 @@ function prArmSeatPresence(pushBalance){
       .catch(e=>console.warn('[mp] rejoin balance assert failed',e));
   }
   ref.child('seats/'+seatKey+'/status').onDisconnect().set('absent');
-  ref.child('round/bets/'+uid+'/status').onDisconnect().set('pass');
+  // PASS-WITH-AMOUNT BUG (fixed Oct 11 2026). There used to be a second
+  // handler here: round/bets/<uid>/status -> 'pass'. It was the bug. A
+  // server-side onDisconnect fires whenever Firebase NOTICES the drop, often
+  // 30-60s after the socket died, by which point betting has long been
+  // locked. It flipped a live bet to status:'pass' with the AMOUNT still on
+  // it; settlement only pays status==='bet', so the hand vanished and a
+  // shooter who dropped mid-hand escaped the loss (and the win). Three
+  // "variants" were seen, one per phase the handler could land in.
+  // Nothing needs to pass a dropped player anyway: during betting the 20s
+  // betting timer auto-passes a pending bet, and once money is down it
+  // RIDES, exactly as it would on the street, with the host's shooter timer
+  // force-rolling for them. The seat 'absent' flag above is all we register.
   if(_prReconnectWatch)return;
   _prReconnectWatch=true;
   _rtdb.ref('.info/connected').on('value',snap=>{
@@ -8356,7 +8367,7 @@ function prArmSeatPresence(pushBalance){
     // Deliberately does NOT touch balance — see above.
     _prRoomRef.child('seats/'+_prMySeatKey+'/status').set('active').catch(()=>{});
     _prRoomRef.child('seats/'+_prMySeatKey+'/status').onDisconnect().set('absent');
-    _prRoomRef.child('round/bets/'+_uid+'/status').onDisconnect().set('pass');
+    // (no bet-status handler here either; see prArmSeatPresence)
   });
 }
 let _prIsHost=false;             // am I the host (the Bank)?
@@ -9016,6 +9027,8 @@ function prResetState(){
   if(_prRoomRef&&_prMySeatKey!==null){
     try{
       _prRoomRef.child('seats/'+_prMySeatKey+'/status').onDisconnect().cancel();
+      // Older builds also armed round/bets/<uid>/status; cancelling that path
+      // is harmless and covers a client that upgraded mid-session.
       _prRoomRef.child('round/bets/'+_uid+'/status').onDisconnect().cancel();
     }catch(e){}
   }
@@ -9809,18 +9822,35 @@ function mpStartBetTimer(room,round){
   _mpBetTimerId=setInterval(tick,250);
 }
 
+// SAFETY NET for the pass-with-amount bug. A bet can only reach status 'pass'
+// with amount>0 through a write that forgot to zero the money (the old
+// onDisconnect handler was the only one). The money is the truth: treat such
+// a bet as a live bet, and write the status back so settlement pays it.
+// Returns true if the bet should count as live. `updates` keys are relative
+// to the round node (same shape both callers already use).
+function mpIsLiveBet(uid,b,updates){
+  if(!b||!(b.amount>0))return false;
+  if(b.status==='bet')return true;
+  if(b.status==='pass'){
+    console.warn('[mp] pass with money on it, restoring as a bet',uid,b.amount);
+    if(updates)updates['bets/'+uid+'/status']='bet';
+    return true;
+  }
+  return false;
+}
+
 // Host: lock the betting phase. Auto-pass anyone still pending, then advance.
 function mpHostFinalizeBetting(round){
   if(!_mpIsHost||!_mpRoomRef)return;
   // Avoid double-firing
   if(round.phase!=='betting')return;
   const bets=round.bets||{};
-  // Count REAL bets (status 'bet' with a positive amount). Pending players are
-  // auto-passed below, so they don't count.
+  // Count REAL bets (money down). Pending players are auto-passed below, so
+  // they don't count. A 'pass' that still carries money is repaired to a bet.
+  const updates={phase:'pre-roll'};
   let liveBets=0;
   for(const uid in bets){
-    const b=bets[uid];
-    if(b&&b.status==='bet'&&b.amount>0)liveBets++;
+    if(mpIsLiveBet(uid,bets[uid],updates))liveBets++;
   }
   if(liveBets===0){
     // Nobody put money down → there's nothing to play for. Don't make the bank
@@ -9828,7 +9858,6 @@ function mpHostFinalizeBetting(round){
     mpHostFinalizeRoundNoBets();
     return;
   }
-  const updates={phase:'pre-roll'};
   for(const uid in bets){
     if(bets[uid]&&bets[uid].status==='pending'){
       updates['bets/'+uid+'/status']='pass';
@@ -9853,25 +9882,27 @@ function mpHostStartPlayerRolls(){
   if(!round||round.phase!=='bank-result'||round.bankResultType!=='point')return;
   const bets=round.bets||{};
   const seats=_mpRoom.seats||{};
-  // Build queue in seat order, only including players who bet (not passed)
+  // Build queue in seat order, only including players with money down. A
+  // 'pass' that still carries money is repaired to a bet (see mpIsLiveBet).
   const queue=[];
+  const repairs={};
   for(let i=0;i<PR_MAX_SEATS;i++){
     const s=seats[i];
     if(!s||!s.uid)continue;
-    const b=bets[s.uid];
-    if(b&&b.status==='bet'&&b.amount>0)queue.push(s.uid);
+    if(mpIsLiveBet(s.uid,bets[s.uid],repairs))queue.push(s.uid);
   }
   if(queue.length===0){
     // Everyone passed — bank wins by default (no settlements needed, push round)
     mpHostFinalizeRoundNoBets();
     return;
   }
-  _mpRoomRef.child('round').update({
+  const upd=Object.assign(repairs,{
     phase:'player-rolls',
     shooterQueue:queue,
     currentShooterIdx:0,
     shooterDeadline:Date.now()+MP_SHOOTER_TIMER_MS
-  }).catch(err=>console.error('Start player rolls failed',err));
+  });
+  _mpRoomRef.child('round').update(upd).catch(err=>console.error('Start player rolls failed',err));
 }
 
 // No one bet → skip directly to "next round" prompt without a settlement screen.
