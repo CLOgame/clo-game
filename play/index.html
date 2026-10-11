@@ -38,7 +38,11 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-11a';
+  window.CLO_BUILD = '2026-10-11b';
+  // Deeper stack traces (default is 10 frames). The recurring RangeError in
+  // firebase-database has never shown a play/:NNNN frame because the SDK's
+  // own frames fill the first 10. Costs nothing unless an error is created.
+  Error.stackTraceLimit = 100;
   console.log('%c[build] C-LO Champs ' + window.CLO_BUILD,
               'background:#d4a843;color:#1a0800;font-weight:700;padding:2px 6px;border-radius:3px');
   if ('serviceWorker' in navigator) {
@@ -9084,7 +9088,37 @@ function mpEnterTable(roomRef,isHost){
   mpUpdateBalanceDisplay();
 
   // Attach the live listener
-  _mpRoomListener=_mpRoomRef.on('value',snap=>{
+  // RE-ENTRANCY GUARD (Oct 11 2026) for the long-running "RangeError: Maximum
+  // call stack size exceeded" inside firebase-database. The RTDB SDK raises
+  // value events SYNCHRONOUSLY, including for a local write, and its event
+  // queue has no re-entrancy protection. So if anything this callback runs
+  // writes to the room, the SDK fires this callback again from INSIDE the
+  // write, before the first run has returned; if that run writes again, the
+  // stack grows until it blows. We can't find the writer by reading, so:
+  //  - if the callback is re-entered, do NOT run the body again; remember
+  //    the snapshot and replay it on a fresh stack (setTimeout 0). The round
+  //    still renders with the latest data, just not recursively;
+  //  - log the re-entry ONCE with a deep stack so the writer gets named.
+  let _mpListenerDepth=0,_mpPendingSnap=null,_mpReentryLogged=false;
+  const onRoomSnap=snap=>{
+    if(_mpListenerDepth>0){
+      _mpPendingSnap=snap;
+      if(!_mpReentryLogged){
+        _mpReentryLogged=true;
+        console.warn('[mp] room listener RE-ENTERED from inside its own callback — '+
+                     'something below writes to the room on every snapshot. Stack:\n'+(new Error().stack));
+      }
+      return;
+    }
+    _mpListenerDepth++;
+    try{ handleRoomSnap(snap); }
+    finally{
+      _mpListenerDepth--;
+      if(_mpPendingSnap){ const s=_mpPendingSnap; _mpPendingSnap=null; setTimeout(()=>onRoomSnap(s),0); }
+    }
+  };
+  _mpRoomListener=_mpRoomRef.on('value',onRoomSnap);
+  function handleRoomSnap(snap){
     const room=snap.val();
     if(!room){
       // Room was deleted (host left or table closed)
@@ -9120,7 +9154,7 @@ function mpEnterTable(roomRef,isHost){
       }
     }
     mpHandleRoundState(room);
-  });
+  }
 
   // Host: if there's no round yet, initialize Round 1.
   // Reads the WHOLE room, not just 'round': mpInitRound() builds its bets from
