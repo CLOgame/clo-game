@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-12a';
+  window.CLO_BUILD = '2026-10-12b';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -10047,12 +10047,25 @@ function mpRenderPlayerRollsPhase(room,round){
   }
 }
 
+let _mpShooterTimerKey=null;
 function mpStartShooterTimer(round){
-  if(_mpShooterTimerId){clearInterval(_mpShooterTimerId);_mpShooterTimerId=null;}
-  if(!round.shooterDeadline)return;
+  if(!round.shooterDeadline){
+    if(_mpShooterTimerId){clearInterval(_mpShooterTimerId);_mpShooterTimerId=null;}
+    _mpShooterTimerKey=null;
+    return;
+  }
   const queue=round.shooterQueue||[];
   const idx=round.currentShooterIdx||0;
   const currentUid=queue[idx];
+  // IDEMPOTENT per shooter turn (Oct 12 2026). This is called from the
+  // player-rolls render, i.e. on EVERY snapshot. Restarting the interval each
+  // time also re-ran tick() immediately, which is how a passed deadline got
+  // acted on again and again. Same round, same shooter, same deadline → the
+  // timer that is already running is the right one; leave it alone.
+  const key=(round.number||0)+':'+idx+':'+currentUid+':'+round.shooterDeadline;
+  if(_mpShooterTimerId&&_mpShooterTimerKey===key)return;
+  if(_mpShooterTimerId){clearInterval(_mpShooterTimerId);_mpShooterTimerId=null;}
+  _mpShooterTimerKey=key;
   const tick=()=>{
     // Host-only safety net: detect a stuck shake state. mpPlayerRoll writes
     // shooting:true immediately and the reveal 1.2s later. If the reveal
@@ -10071,9 +10084,14 @@ function mpStartShooterTimer(round){
     }
     const remain=Math.max(0,round.shooterDeadline-Date.now());
     if(remain<=0){
-      clearInterval(_mpShooterTimerId);_mpShooterTimerId=null;
+      clearInterval(_mpShooterTimerId);_mpShooterTimerId=null;_mpShooterTimerKey=null;
       // Whoever the shooter is auto-rolls on their own device. Plus host
       // safety net: if shooter's device is offline, host force-rolls for them.
+      // Neither runs for a bet that already has a result.
+      const liveBets=(_mpRoom&&_mpRoom.round&&_mpRoom.round.bets)||{};
+      const cb=liveBets[currentUid];
+      const resolved=!!(cb&&(cb.dice||cb.resultType));
+      if(resolved)return;
       if(currentUid===_mpMyUid){
         mpPlayerRoll();
       }else if(_mpIsHost){
@@ -10147,6 +10165,17 @@ function mpHostForceRollFor(uid){
   const queue=round.shooterQueue||[];
   const idx=round.currentShooterIdx||0;
   if(queue[idx]!==uid)return;
+  // ALREADY-ROLLED GUARD (Oct 12 2026) — THE RANGEERROR / STATIC / DICE-
+  // TUMBLING-IN-PLACE BUG. Once the shooter deadline passed, every room
+  // snapshot re-rendered player-rolls, which restarted the shooter timer,
+  // whose first tick saw "deadline passed" and force-rolled AGAIN — a new
+  // write, a new snapshot, a new force-roll, for the 3.4s until the host
+  // advanced the queue. The dice kept being re-thrown with new values (the
+  // "tumbling in place") and the throw sound re-fired every few ms (the
+  // static); before the listener guard it recursed until the stack blew.
+  // A bet that already has a result is DONE. Never roll it twice.
+  const cur=(round.bets||{})[uid];
+  if(cur&&(cur.dice||cur.resultType))return;
   const final=mpResolveRollUntilDecided();
   const resultType=mpCompareToBankPoint(final,round);
   // Single write — no shake animation for force-rolls. Players who got
