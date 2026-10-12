@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-11b';
+  window.CLO_BUILD = '2026-10-12a';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -6930,6 +6930,32 @@ window.addEventListener('load',()=>{
       databaseURL:"https://clo-beat-the-bank-default-rtdb.firebaseio.com"
     });
     _auth=firebase.auth();_db=firebase.firestore();_rtdb=firebase.database();
+    // RTDB WRITE MONITOR (Oct 12 2026). The "static + dice tumbling in place"
+    // freeze is a FLOOD of room snapshots re-rendering the shake every few
+    // ms. A snapshot flood means a write flood, and every write from this
+    // client goes through Reference.set/update. Count them; when this client
+    // exceeds 8 writes in one second, log the path and a stack so the
+    // flooding call site is named. Logs at most 5 times per table.
+    try{
+      const RP=firebase.database.Reference.prototype;
+      let wTimes=[],wLogged=0;
+      window._mpWriteMonitorReset=()=>{wTimes=[];wLogged=0;};
+      ['set','update'].forEach(m=>{
+        const orig=RP[m];
+        RP[m]=function(){
+          const now=Date.now();
+          wTimes.push(now);
+          while(wTimes.length&&now-wTimes[0]>1000)wTimes.shift();
+          if(wTimes.length>8&&wLogged<5){
+            wLogged++;
+            let path='?';try{path=this.toString().replace(/^https?:\/\/[^/]+/,'');}catch(_){}
+            console.warn('[rtdb flood] '+wTimes.length+' writes/sec — '+m+' '+path+
+                         ' phase='+(window._mpRoom&&_mpRoom.round?_mpRoom.round.phase:'-')+'\n'+(new Error().stack));
+          }
+          return orig.apply(this,arguments);
+        };
+      });
+    }catch(e){console.warn('[rtdb flood] monitor not installed',e);}
     // Track whether the Realtime Database is actually connected. This is
     // separate from auth — RTDB can be disconnected even while signed in.
     window._rtdbConnected=false;
@@ -9099,14 +9125,20 @@ function mpEnterTable(roomRef,isHost){
   //    the snapshot and replay it on a fresh stack (setTimeout 0). The round
   //    still renders with the latest data, just not recursively;
   //  - log the re-entry ONCE with a deep stack so the writer gets named.
-  let _mpListenerDepth=0,_mpPendingSnap=null,_mpReentryLogged=false;
+  let _mpListenerDepth=0,_mpPendingSnap=null,_mpReentryLogs=0,_mpReentryLastAt=0;
   const onRoomSnap=snap=>{
     if(_mpListenerDepth>0){
       _mpPendingSnap=snap;
-      if(!_mpReentryLogged){
-        _mpReentryLogged=true;
-        console.warn('[mp] room listener RE-ENTERED from inside its own callback — '+
-                     'something below writes to the room on every snapshot. Stack:\n'+(new Error().stack));
+      // Log the first 5 re-entries, at most one per second, with the phase.
+      // (The 11b build logged only the FIRST, which turned out to be the
+      // benign Round-1 retry at table start, so the mid-game writer was
+      // never named.)
+      const now=Date.now();
+      if(_mpReentryLogs<5&&now-_mpReentryLastAt>1000){
+        _mpReentryLogs++;_mpReentryLastAt=now;
+        const ph=(_mpRoom&&_mpRoom.round)?_mpRoom.round.phase:'-';
+        console.warn('[mp] room listener RE-ENTERED #'+_mpReentryLogs+' (phase '+ph+') — '+
+                     'something below writes to the room from inside the callback. Stack:\n'+(new Error().stack));
       }
       return;
     }
@@ -9117,6 +9149,7 @@ function mpEnterTable(roomRef,isHost){
       if(_mpPendingSnap){ const s=_mpPendingSnap; _mpPendingSnap=null; setTimeout(()=>onRoomSnap(s),0); }
     }
   };
+  try{ if(window._mpWriteMonitorReset)window._mpWriteMonitorReset(); }catch(_){}
   _mpRoomListener=_mpRoomRef.on('value',onRoomSnap);
   function handleRoomSnap(snap){
     const room=snap.val();
@@ -9147,7 +9180,8 @@ function mpEnterTable(roomRef,isHost){
         if(!_mpInitRoundAt || now-_mpInitRoundAt>4000){
           _mpInitRoundAt=now;
           console.warn('[mp] no round yet — retrying Round 1 init');
-          mpInitRound(1);
+          // On a fresh stack: writing from inside the listener re-enters it.
+          setTimeout(()=>mpInitRound(1),0);
         }
       }else if(room.round){
         _mpInitRoundAt=0;
