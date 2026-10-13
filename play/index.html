@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-12b';
+  window.CLO_BUILD = '2026-10-13a';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -93,6 +93,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-functions-compat.js"></script>
 
 <style>
 /* ── Reset ─────────────────────────────────────────────────────────────── */
@@ -6727,7 +6728,11 @@ function enterOfflineMode(){
 // balance, so the client is the single writer of balance and a claim simply
 // adds the owed amount to it. No double counting, no stomping.
 let _referralClaimAt=0,_referralClaimBusy=false,_referralClaimPromise=null;
-const SERVER_OWNED_FIELDS=['pendingReferralCredit','referralsCredited','createdAt'];
+// Oct 13 2026: pendingPurchaseCredit + pendingFreeRollSkips are the Play
+// Billing ledgers. verifyPurchase (Cloud Function) is their only writer; the
+// client only ever DRAINS them, exactly like the referral credit.
+const SERVER_OWNED_FIELDS=['pendingReferralCredit','referralsCredited','createdAt',
+  'pendingPurchaseCredit','pendingFreeRollSkips'];
 // Repaint every on-screen chip count from `balance`. updateTopChips() only
 // covers the in-game pill, so a balance change that lands while the LOBBY is
 // showing (a referral claim, a held rank-up bonus) used to update the money
@@ -6789,21 +6794,43 @@ async function _doClaimReferralCredit(){
       if(!snap.exists)return null;
       const srv=snap.data()||{};
       const owed=(typeof srv.pendingReferralCredit==='number')?srv.pendingReferralCredit:0;
-      if(owed<=0)return null;
+      // Play Billing chips land in their own ledger (written by verifyPurchase).
+      // Drain it in the same commit so one transaction covers both.
+      const bought=(typeof srv.pendingPurchaseCredit==='number')?srv.pendingPurchaseCredit:0;
+      if(owed<=0&&bought<=0)return null;
       const base=(typeof _profile.balance==='number')?_profile.balance:0;
-      const newBal=base+owed;
-      tx.set(ref,{balance:newBal,pendingReferralCredit:0},{merge:true});
-      return {owed,newBal,credited:srv.referralsCredited};
+      const newBal=base+Math.max(owed,0)+Math.max(bought,0);
+      const w={balance:newBal};
+      if(owed>0)w.pendingReferralCredit=0;
+      if(bought>0){
+        w.pendingPurchaseCredit=0;
+        // Analytics only — never totalEarned (that would sell rank + leaderboard).
+        w.purchasedTotal=(typeof srv.purchasedTotal==='number'?srv.purchasedTotal:0)+bought;
+      }
+      tx.set(ref,w,{merge:true});
+      return {owed:Math.max(owed,0),bought:Math.max(bought,0),newBal,credited:srv.referralsCredited,purchasedTotal:w.purchasedTotal};
     });
     if(claimed){
       _profile.balance=claimed.newBal;
       _profile.pendingReferralCredit=0;
+      _profile.pendingPurchaseCredit=0;
+      if(typeof claimed.purchasedTotal==='number')_profile.purchasedTotal=claimed.purchasedTotal;
       if(typeof claimed.credited==='number')_profile.referralsCredited=claimed.credited;
       balance=claimed.newBal;
       saveLocalProfile(_profile);
       _refreshChipDisplays();
-      try{ if(typeof showToast==='function')showToast('🎁 +'+claimed.owed.toLocaleString()+' referral bonus from your crew!'); }catch(_){}
-      console.log('[referral] claimed',claimed.owed);
+      // Bought chips while seated at a live table: the seat is the source of
+      // truth there (see grantChipPurchase), so push the new balance to it or
+      // the next room snapshot would reset it to the old seat value.
+      if(claimed.bought>0){ try{ if(typeof mpPushBalanceToSeat==='function')mpPushBalanceToSeat(); }catch(_){} }
+      try{
+        if(typeof showToast==='function'){
+          if(claimed.bought>0)showToast('+'+claimed.bought.toLocaleString()+' chips added! 🪙');
+          if(claimed.owed>0)showToast('🎁 +'+claimed.owed.toLocaleString()+' referral bonus from your crew!');
+        }
+      }catch(_){}
+      if(claimed.owed>0)console.log('[referral] claimed',claimed.owed);
+      if(claimed.bought>0)console.log('[billing] claimed',claimed.bought);
     }
   }catch(e){
     // Lost a race or offline. The bonus is still in pendingReferralCredit,
@@ -7063,6 +7090,9 @@ window.addEventListener('load',()=>{
             balance=_profile.balance||10000;
             // Claim any referral bonus that arrived while we were away.
             setTimeout(()=>{ try{ claimReferralCredit(true); }catch(_){} },1500);
+            // Inside the Play app: finish any purchase Play still holds
+            // (consume + credit). No-op in a browser.
+            setTimeout(()=>{ try{ restorePurchases(); }catch(_){} },4000);
             // Ensure dice-shop fields exist for older profiles
             if(!_profile.diceSkin)_profile.diceSkin='red';
             if(!_profile.ownedDice)_profile.ownedDice=['red','blue','green','black','white','multi'];
@@ -7837,10 +7867,15 @@ function applyAdState(){
 
 async function buyRemoveAds(){
   if(adsRemoved()){ showToast('Ads already removed ✅'); return; }
-  // ── STORE BILLING SWAP-POINT (non-consumable) ─────────────────────────
-  // In the store build: call billing SDK with REMOVE_ADS_PRODUCT.productId,
-  // then on verified receipt run the grant block below. Non-consumables must
-  // also be restorable via the store's "restore purchases" flow.
+  // Non-consumable. Inside the Play app: Play Billing → verifyPurchase sets
+  // adsRemoved on the server doc → we mirror it locally. In a plain browser
+  // (or with the tester override) the preview dialog grants it directly.
+  if(await storeReady()){
+    const r=await storeBuy(REMOVE_ADS_PRODUCT.productId);
+    if(r.ok)grantRemoveAds();
+    return;
+  }
+  if(!billingPreviewAllowed()){ showStoreOnlyNotice('Remove Ads'); return; }
   const ok=await confirmPurchase({
     icon:'🚫',
     title:'Remove Ads',
@@ -7869,10 +7904,19 @@ async function buyChips(tierIdx){
   if(!t)return;
   // Second gate: locked cards have no onclick, but any other caller is refused.
   if(chipPackLocked(t.productId)){ showToast('That pack is coming soon 🔒'); return; }
-  // ── STORE BILLING SWAP-POINT ──────────────────────────────────────────
-  // In the native store build, replace the confirmPurchase() block below
-  // with a call into the store's billing SDK keyed on t.productId. On the
-  // store's verified-receipt callback, call grantChipPurchase(t.productId).
+  // Inside the Play app: real Play Billing. The chips are credited by the
+  // verifyPurchase Cloud Function into pendingPurchaseCredit and claimed by
+  // claimReferralCredit(true) (storeBuy does that), so the money path is the
+  // same one the referral bonus uses — the client never adds chips to itself
+  // for a store purchase.
+  if(await storeReady()){
+    const r=await storeBuy(t.productId);
+    if(r.ok){ awardXP('chipbuy'); if(typeof soundWin==='function')soundWin(); }
+    return;
+  }
+  // Plain browser (clochamps.com, Mac, phone browser): no store here.
+  if(!billingPreviewAllowed()){ showStoreOnlyNotice(fmtChips(t.chips)+' Chips'); return; }
+  // Tester override — the old preview dialog, grants locally, no real charge.
   const ok=await confirmPurchase({
     icon:'🪙',
     title:`${fmtChips(t.chips)} Chips`,
@@ -7882,6 +7926,223 @@ async function buyChips(tierIdx){
   });
   if(!ok)return;
   grantChipPurchase(t.productId);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLAY BILLING (Oct 13 2026) — Digital Goods API inside the Play (TWA) app.
+//
+// How a purchase flows:
+//   1. storeBuy(productId) opens Google Play's native purchase sheet via
+//      PaymentRequest with the Play Billing payment method. Play returns a
+//      purchaseToken — a receipt string. Nothing is granted yet.
+//   2. The token goes to the verifyPurchase Cloud Function. The SERVER asks
+//      Google's Play Developer API whether that token is a real, paid,
+//      un-consumed purchase of that product. Only if Google says yes does the
+//      function write the reward into the player's doc: chips into
+//      pendingPurchaseCredit, a Free Roll skip into pendingFreeRollSkips, or
+//      adsRemoved:true. It also records the token under purchases/ so the
+//      same receipt can never be paid twice.
+//   3. The client then tells Play the purchase is finished: consume() for
+//      chip packs and roll skips (so they can be bought again), and
+//      complete('success') which acknowledges it. Google REFUNDS any purchase
+//      that is not acknowledged within 3 days, which is why the server
+//      acknowledges it too, as part of step 2.
+//   4. claimReferralCredit(true) drains the ledger into `balance` — the exact
+//      mechanism the referral bonus already uses and that Oct 4/11 verified.
+//
+// Why the server decides: anything this file does can be done from the
+// browser console. If the client granted chips on its own say-so, "buying"
+// 100M chips would be one line of JavaScript. With the ledger design the only
+// thing that adds purchase chips is a Cloud Function that has checked the
+// receipt with Google.
+//
+// restorePurchases() runs at boot: it lists purchases Play still holds (a
+// consumable whose consume() never ran because the app died mid-purchase, or
+// the Remove Ads non-consumable on a new phone) and pushes each through the
+// same verify → consume path. verifyPurchase is idempotent, so a token that
+// was already paid just comes back {already:true} and gets consumed.
+//
+// Outside the Play app (clochamps.com in a browser) there is no store, so
+// buy buttons show a "get the Android app" notice. Testers can keep using the
+// old preview dialog by running  localStorage.clo_billing_preview='1'  in
+// the console once (billingPreviewAllowed). That preview grants chips
+// locally and never touches Play or the function.
+// ═══════════════════════════════════════════════════════════════════════════
+const PLAY_BILLING_METHOD='https://play.google.com/billing';
+const PLAY_STORE_URL='https://play.google.com/store/apps/details?id=com.clochamps.app';
+// Products that are consumed after every purchase (buyable again). Everything
+// else (clo_remove_ads) is a one-time, non-consumable entitlement.
+const STORE_CONSUMABLES=new Set(['clo_chips_10k','clo_chips_60k','clo_chips_150k',
+  'clo_chips_350k','clo_chips_1m','clo_chips_5m','clo_chips_15m','clo_chips_25m',
+  'clo_chips_50m','clo_chips_100m','clo_free_roll_skip']);
+let _storeService=null,_storeProbe=null,_storeBusy=false,_restoreRan=false;
+
+// Resolves to the DigitalGoodsService inside the Play app, null anywhere else.
+// Probed once and cached; the browser API simply doesn't exist outside a TWA.
+function storeReady(){
+  if(_storeService)return Promise.resolve(_storeService);
+  if(_storeProbe)return _storeProbe;
+  _storeProbe=(async()=>{
+    try{
+      if(typeof window.getDigitalGoodsService!=='function')return null;
+      _storeService=await window.getDigitalGoodsService(PLAY_BILLING_METHOD);
+      console.log('[billing] Play Billing available');
+      return _storeService;
+    }catch(e){ console.log('[billing] no store here:',e&&e.message?e.message:e); return null; }
+  })();
+  return _storeProbe;
+}
+function billingPreviewAllowed(){
+  try{ return localStorage.getItem('clo_billing_preview')==='1'; }catch(_){ return false; }
+}
+function _storeFn(){
+  // firebase-functions-compat is loaded after the other SDKs; guard anyway so
+  // a missing script degrades to a clear error instead of a crash.
+  if(!window.firebase||!firebase.functions)throw new Error('functions SDK missing');
+  return firebase.functions().httpsCallable('verifyPurchase');
+}
+// Ask the server to check a token with Google and credit the reward.
+// Returns the function's result object ({ok, already, grant, chips, ...}).
+async function _storeVerify(productId,purchaseToken){
+  const res=await _storeFn()({productId,purchaseToken});
+  return (res&&res.data)||{ok:false,reason:'empty'};
+}
+// Finish with Play: consume (consumables) then acknowledge via complete().
+async function _storeFinish(service,productId,purchaseToken,paymentResponse){
+  if(STORE_CONSUMABLES.has(productId)){
+    try{ await service.consume(purchaseToken); }
+    catch(e){ console.warn('[billing] consume failed (restorePurchases will retry):',e); }
+  }
+  if(paymentResponse){ try{ await paymentResponse.complete('success'); }catch(_){} }
+}
+// Apply a verified grant locally. Chips come through the ledger claim;
+// Free Roll skips are claimed on the Free Roll screen; Remove Ads is mirrored.
+async function _storeApplyGrant(result){
+  if(!result||!result.ok)return;
+  if(result.grant==='chips'){ await claimReferralCredit(true); }
+  else if(result.grant==='ads'){
+    if(_profile&&!_profile.adsRemoved){ _profile.adsRemoved=true; saveLocalProfile(_profile); applyAdState(); }
+  }
+  else if(result.grant==='freeroll'&&!result.already&&_profile){
+    // Mirror the server count so goToFreeRoll knows a paid roll is waiting.
+    // (claimFreeRollSkip's transaction is the real authority.)
+    _profile.pendingFreeRollSkips=(_profile.pendingFreeRollSkips||0)+1;
+  }
+}
+async function storeBuy(productId){
+  if(_storeBusy){ showToast('One purchase at a time 🙂'); return {ok:false,reason:'busy'}; }
+  const service=await storeReady();
+  if(!service)return {ok:false,reason:'nostore'};
+  if(!_uid||!_db||_isOffline){ showToast('Connect to the internet to buy chips 📶'); return {ok:false,reason:'offline'}; }
+  _storeBusy=true;
+  let pr=null,resp=null;
+  try{
+    // The amount here is ignored by Play (it uses the console price); the
+    // PaymentRequest API just requires a total to be present.
+    pr=new PaymentRequest(
+      [{supportedMethods:PLAY_BILLING_METHOD,data:{sku:productId}}],
+      {total:{label:'Total',amount:{currency:'USD',value:'0'}}});
+    resp=await pr.show();                       // Google Play's purchase sheet
+    const token=resp&&resp.details&&resp.details.purchaseToken;
+    if(!token)throw new Error('no purchaseToken in response');
+    let result;
+    try{ result=await _storeVerify(productId,token); }
+    catch(e){
+      // Network blip between Play and our function: the purchase is real and
+      // Play still holds it. Leave it un-consumed; restorePurchases() will
+      // verify + consume it next boot. Tell Play we're done for now.
+      console.warn('[billing] verify call failed:',e);
+      try{ await resp.complete('success'); }catch(_){}
+      showToast('Purchase received — chips will land on your next launch 🪙');
+      return {ok:false,reason:'verify-failed',pending:true};
+    }
+    if(!result.ok){
+      // Google did not confirm this token (refunded, pending, wrong product…).
+      // Do NOT consume — if it's merely pending (slow payment method) Play
+      // will keep it and restorePurchases picks it up once it clears.
+      console.warn('[billing] rejected:',result);
+      try{ await resp.complete(result.reason==='pending'?'success':'fail'); }catch(_){}
+      showToast(result.reason==='pending'?'Payment pending — chips arrive once it clears ⏳':'Purchase could not be verified');
+      return result;
+    }
+    await _storeFinish(service,productId,token,resp);
+    await _storeApplyGrant(result);
+    console.log('[billing] purchase ok',productId,result.already?'(already credited)':'');
+    return result;
+  }catch(e){
+    // AbortError = the player closed the Play sheet. Anything else is logged.
+    if(!(e&&e.name==='AbortError'))console.warn('[billing] purchase failed:',e);
+    if(resp){ try{ await resp.complete('fail'); }catch(_){} }
+    return {ok:false,reason:(e&&e.name)||'error'};
+  }finally{ _storeBusy=false; }
+}
+// Boot-time sweep: anything Play still holds for this account gets verified
+// and finished. Runs once per session, a few seconds after the profile loads.
+async function restorePurchases(){
+  if(_restoreRan)return; _restoreRan=true;
+  try{
+    const service=await storeReady();
+    if(!service||!_uid||!_db||_isOffline)return;
+    const list=await service.listPurchases();
+    if(!list||!list.length)return;
+    for(const p of list){
+      const productId=p.itemId,token=p.purchaseToken;
+      if(!productId||!token)continue;
+      // Remove Ads already owned locally — nothing to do, skip the round trip.
+      if(productId==='clo_remove_ads'&&adsRemoved())continue;
+      try{
+        const result=await _storeVerify(productId,token);
+        if(result.ok){
+          await _storeFinish(service,productId,token,null);
+          await _storeApplyGrant(result);
+          if(result.grant==='freeroll'&&!result.already)showToast('Your paid Free Roll is waiting in Rewards 🎲');
+          console.log('[billing] restored',productId,result.already?'(already credited)':'');
+        }else console.warn('[billing] restore skipped',productId,result.reason);
+      }catch(e){ console.warn('[billing] restore failed',productId,e); }
+    }
+  }catch(e){ console.warn('[billing] restorePurchases:',e); }
+}
+// Browser-only notice (no store outside the Play app).
+function showStoreOnlyNotice(what){
+  if(document.querySelector('.store-only-overlay'))return;
+  const overlay=document.createElement('div');
+  overlay.className='popup-overlay buy-confirm-overlay store-only-overlay';
+  overlay.innerHTML=`
+    <div class="popup-card confirm-card buy-confirm-card">
+      <div class="buy-confirm-icon">🪙</div>
+      <div class="confirm-title">${_dlgEscape(what||'Purchases')}</div>
+      <div class="confirm-sub">Chip purchases are made through the C-LO Champs Android app. Your account, chips and stats carry over — sign in with the same Google account.</div>
+      <div class="confirm-btn-row">
+        <button class="popup-btn popup-btn-secondary" id="store-only-close">Not now</button>
+        <button class="popup-btn buy-confirm-go" id="store-only-go">Get the app</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#store-only-close').onclick=()=>overlay.remove();
+  overlay.querySelector('#store-only-go').onclick=()=>{ overlay.remove(); try{ window.open(PLAY_STORE_URL,'_blank','noopener'); }catch(_){ location.href=PLAY_STORE_URL; } };
+  overlay.onclick=e=>{ if(e.target===overlay)overlay.remove(); };
+}
+// Free Roll skip ledger: verifyPurchase increments pendingFreeRollSkips;
+// this drains ONE and returns true. Called right after a purchase and from
+// goToFreeRoll when the player arrives with no roll available (covers an app
+// that died between paying and rolling — the paid roll is still owed).
+let _frSkipClaimBusy=false;
+async function claimFreeRollSkip(){
+  if(_frSkipClaimBusy||!_uid||!_db||_isOffline)return false;
+  _frSkipClaimBusy=true;
+  try{
+    const ref=_db.collection('players').doc(_uid);
+    const got=await _db.runTransaction(async tx=>{
+      const snap=await tx.get(ref); if(!snap.exists)return false;
+      const n=snap.data().pendingFreeRollSkips;
+      if(typeof n!=='number'||n<=0)return false;
+      tx.set(ref,{pendingFreeRollSkips:n-1},{merge:true});
+      return true;
+    });
+    if(got&&_profile){ _profile.pendingFreeRollSkips=Math.max(0,(_profile.pendingFreeRollSkips||1)-1); }
+    return !!got;
+  }catch(e){ console.warn('[billing] free roll claim deferred:',e&&e.code?e.code:e); return false; }
+  finally{ _frSkipClaimBusy=false; }
 }
 
 // Google sign-in / account-linking. If the player is currently an anonymous
@@ -8022,6 +8283,14 @@ function goToFreeRoll(){
   if(!_frRollSource&&stacksOnEntry<1){
     if(typeof refreshFrAdRollUI==='function')refreshFrAdRollUI();
     if(buyBtn)buyBtn.style.display='block';
+    // A paid Free Roll Skip the player never got to use (app closed between
+    // paying and rolling) is still owed — hand it over now.
+    if(_profile&&(_profile.pendingFreeRollSkips||0)>0&&typeof claimFreeRollSkip==='function'){
+      claimFreeRollSkip().then(got=>{
+        if(got&&document.getElementById('screen-freeroll').classList.contains('active')&&!_frRollSource)
+          grantBonusRoll('Paid bonus roll — ready!','paid');
+      });
+    }
   }
 }
 function goToLobby(){
@@ -15660,10 +15929,22 @@ function grantBonusRoll(noteText,source){
   resetFrDice();
 }
 
-function buyAnotherRoll(){
-  // Placeholder for $0.99 IAP — skips the ad, grants the roll instantly.
-  // Real flow: trigger Google Play / Apple IAP → on purchase success → grant.
-  showToast('$0.99 purchase — coming at launch! 🎲');
+async function buyAnotherRoll(){
+  // $0.99 Free Roll Skip (clo_free_roll_skip). Inside the Play app the
+  // purchase is verified server-side, which adds one to pendingFreeRollSkips;
+  // claimFreeRollSkip() then spends it and the roll is granted. Outside the
+  // app: store notice, or the preview grant for testers.
+  if(await storeReady()){
+    const r=await storeBuy('clo_free_roll_skip');
+    if(!r.ok)return;
+    if(await claimFreeRollSkip())grantBonusRoll('Paid bonus roll!','paid');
+    else showToast('Roll paid — it will be ready next time you open Free Roll 🎲');
+    return;
+  }
+  if(!billingPreviewAllowed()){ showStoreOnlyNotice('Free Roll Skip'); return; }
+  const ok=await confirmPurchase({icon:'🎲',title:'Free Roll Skip',reward:'Roll again right now',
+    sub:'Skips the ad and unlocks one more Free Roll.',price:'0.99'});
+  if(!ok)return;
   grantBonusRoll('Paid bonus roll!','paid');
 }
 
