@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-13b';
+  window.CLO_BUILD = '2026-10-13c';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -6696,7 +6696,11 @@ function enterOfflineMode(){
   if(_isOffline&&_profile)return;   // already set up
   window._bootPath=(window._bootPath||'')+'>offline';
   _isOffline=true;
-  _uid=null;
+  // Oct 13 2026: keep a signed-in uid. This path fires at 4s when the PROFILE
+  // fetch is slow (cold phone launch), not only when Firebase is down, and
+  // nulling _uid here left the whole session "logged out" (silent local-only
+  // saves, billing refused) after the profile then loaded fine.
+  _uid=(_auth&&_auth.currentUser)?_auth.currentUser.uid:null;
   if(!_profile)_profile=loadLocalProfile()||makeDefaultProfile();
   saveLocalProfile(_profile);
   balance=_profile.balance||10000;
@@ -7094,6 +7098,9 @@ window.addEventListener('load',()=>{
               }
             }
             balance=_profile.balance||10000;
+            // The profile just came from Firestore: clear any offline state the
+            // 4s fallback set while this fetch was still in flight.
+            _isOffline=false; if(_auth&&_auth.currentUser)_uid=_auth.currentUser.uid;
             // Claim any referral bonus that arrived while we were away.
             setTimeout(()=>{ try{ claimReferralCredit(true); }catch(_){} },1500);
             // Inside the Play app: finish any purchase Play still holds
@@ -7998,6 +8005,16 @@ function storeReady(){
   })();
   return _storeProbe;
 }
+// Like mpTryRecoverAuth: a lost _uid is recoverable from Firebase itself.
+function _storeRecoverUid(){
+  try{ if(!_uid&&_auth&&_auth.currentUser)_uid=_auth.currentUser.uid; }catch(_){}
+}
+function storeBlockReason(){
+  if(navigator.onLine===false)return 'device-offline';
+  if(!_db)return 'no-db';
+  if(!_uid)return 'no-uid';
+  return 'ok';
+}
 function billingPreviewAllowed(){
   try{ return localStorage.getItem('clo_billing_preview')==='1'; }catch(_){ return false; }
 }
@@ -8039,7 +8056,9 @@ async function storeBuy(productId){
   if(_storeBusy){ showToast('One purchase at a time 🙂'); return {ok:false,reason:'busy'}; }
   const service=await storeReady();
   if(!service)return {ok:false,reason:'nostore'};
-  if(navigator.onLine===false||!_uid||!_db){ showToast('Connect to the internet to buy chips 📶'); return {ok:false,reason:'offline'}; }
+  _storeRecoverUid();
+  const why=storeBlockReason();
+  if(why!=='ok'){ console.warn('[billing] blocked:',why); showToast('Connect to the internet to buy chips 📶 ('+why+')'); return {ok:false,reason:why}; }
   _storeBusy=true;
   let pr=null,resp=null;
   try{
@@ -8088,7 +8107,8 @@ async function restorePurchases(){
   if(_restoreRan)return; _restoreRan=true;
   try{
     const service=await storeReady();
-    if(!service||navigator.onLine===false||!_uid||!_db)return;
+    _storeRecoverUid();
+    if(!service||storeBlockReason()!=='ok')return;
     const list=await service.listPurchases();
     if(!list||!list.length)return;
     for(const p of list){
@@ -8134,7 +8154,8 @@ function showStoreOnlyNotice(what){
 // that died between paying and rolling — the paid roll is still owed).
 let _frSkipClaimBusy=false;
 async function claimFreeRollSkip(){
-  if(_frSkipClaimBusy||navigator.onLine===false||!_uid||!_db)return false;
+  _storeRecoverUid();
+  if(_frSkipClaimBusy||storeBlockReason()!=='ok')return false;
   _frSkipClaimBusy=true;
   try{
     const ref=_db.collection('players').doc(_uid);
