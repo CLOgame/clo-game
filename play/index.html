@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-13a';
+  window.CLO_BUILD = '2026-10-13b';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -7030,6 +7030,12 @@ window.addEventListener('load',()=>{
       if(user){
         _uid=user.uid;
         _isGuest=!!user.isAnonymous;
+        // Oct 13 2026: a slow cold start can trip the 4s offline fallback
+        // (enterOfflineMode → _isOffline=true) before auth resolves, and
+        // nothing cleared it afterwards — so billing/referral guards that
+        // read the flag refused with "connect to the internet" on a phone
+        // that was online. A signed-in user means Firebase is reachable.
+        _isOffline=false;
       }else{
         _uid=null;
         _isGuest=true;
@@ -8033,7 +8039,7 @@ async function storeBuy(productId){
   if(_storeBusy){ showToast('One purchase at a time 🙂'); return {ok:false,reason:'busy'}; }
   const service=await storeReady();
   if(!service)return {ok:false,reason:'nostore'};
-  if(!_uid||!_db||_isOffline){ showToast('Connect to the internet to buy chips 📶'); return {ok:false,reason:'offline'}; }
+  if(navigator.onLine===false||!_uid||!_db){ showToast('Connect to the internet to buy chips 📶'); return {ok:false,reason:'offline'}; }
   _storeBusy=true;
   let pr=null,resp=null;
   try{
@@ -8082,7 +8088,7 @@ async function restorePurchases(){
   if(_restoreRan)return; _restoreRan=true;
   try{
     const service=await storeReady();
-    if(!service||!_uid||!_db||_isOffline)return;
+    if(!service||navigator.onLine===false||!_uid||!_db)return;
     const list=await service.listPurchases();
     if(!list||!list.length)return;
     for(const p of list){
@@ -8128,7 +8134,7 @@ function showStoreOnlyNotice(what){
 // that died between paying and rolling — the paid roll is still owed).
 let _frSkipClaimBusy=false;
 async function claimFreeRollSkip(){
-  if(_frSkipClaimBusy||!_uid||!_db||_isOffline)return false;
+  if(_frSkipClaimBusy||navigator.onLine===false||!_uid||!_db)return false;
   _frSkipClaimBusy=true;
   try{
     const ref=_db.collection('players').doc(_uid);
