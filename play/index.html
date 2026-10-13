@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-13c';
+  window.CLO_BUILD = '2026-10-13d';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -8009,6 +8009,18 @@ function storeReady(){
 function _storeRecoverUid(){
   try{ if(!_uid&&_auth&&_auth.currentUser)_uid=_auth.currentUser.uid; }catch(_){}
 }
+// Wait (no sign-in attempts, just watching) for Firebase to restore the
+// persisted user. On a cold phone launch that can lag the lobby by seconds.
+function _storeAwaitAuth(ms){
+  return new Promise(resolve=>{
+    _storeRecoverUid(); if(_uid)return resolve(true);
+    const t0=Date.now();
+    const iv=setInterval(()=>{
+      _storeRecoverUid();
+      if(_uid||Date.now()-t0>ms){ clearInterval(iv); resolve(!!_uid); }
+    },150);
+  });
+}
 function storeBlockReason(){
   if(navigator.onLine===false)return 'device-offline';
   if(!_db)return 'no-db';
@@ -8056,9 +8068,14 @@ async function storeBuy(productId){
   if(_storeBusy){ showToast('One purchase at a time 🙂'); return {ok:false,reason:'busy'}; }
   const service=await storeReady();
   if(!service)return {ok:false,reason:'nostore'};
-  _storeRecoverUid();
+  if(!_uid){ showToast('Signing in…'); await _storeAwaitAuth(6000); }
   const why=storeBlockReason();
-  if(why!=='ok'){ console.warn('[billing] blocked:',why); showToast('Connect to the internet to buy chips 📶 ('+why+')'); return {ok:false,reason:why}; }
+  if(why!=='ok'){
+    const diag=why+' · '+(window._bootPath||'?');
+    console.warn('[billing] blocked:',diag);
+    showToast('Connect to the internet to buy chips 📶 ('+diag+')',5000);
+    return {ok:false,reason:why};
+  }
   _storeBusy=true;
   let pr=null,resp=null;
   try{
@@ -8107,8 +8124,9 @@ async function restorePurchases(){
   if(_restoreRan)return; _restoreRan=true;
   try{
     const service=await storeReady();
-    _storeRecoverUid();
-    if(!service||storeBlockReason()!=='ok')return;
+    if(!service)return;
+    await _storeAwaitAuth(8000);
+    if(storeBlockReason()!=='ok'){ console.warn('[billing] restore skipped:',storeBlockReason(),window._bootPath); return; }
     const list=await service.listPurchases();
     if(!list||!list.length)return;
     for(const p of list){
