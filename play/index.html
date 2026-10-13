@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-13d';
+  window.CLO_BUILD = '2026-10-13f';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -1670,6 +1670,12 @@ html,body{
   cursor:default;
 }
 .cs-ra-icon{font-size:2rem;line-height:1;}
+.cs-restore{
+  grid-column:1 / -1;justify-self:center;margin:4px 0 10px;
+  background:none;border:1px solid rgba(255,255,255,0.22);border-radius:999px;
+  color:rgba(255,255,255,0.75);font:600 .78rem/1 inherit;padding:8px 16px;cursor:pointer;
+}
+.cs-restore:active{transform:translateY(1px);}
 .cs-ra-title{
   font-family:'Bebas Neue',sans-serif;
   font-size:1.5rem;letter-spacing:0.1em;
@@ -6746,6 +6752,12 @@ function _refreshChipDisplays(){
   const v=(balance||0).toLocaleString();
   const lc=document.getElementById('lobby-chips'); if(lc)lc.textContent=v;
   const lb=document.getElementById('lobby-balance'); if(lb)lb.textContent='$'+v;
+  // Oct 13 2026: the chip store, landing and Free Roll each carry their own
+  // balance label; a store purchase lands via the ledger claim while the
+  // store is on screen, so repaint those too.
+  const cs=document.getElementById('cs-balance-val'); if(cs)cs.textContent=v;
+  const ld=document.getElementById('landing-chips'); if(ld)ld.textContent=v;
+  const fr=document.getElementById('fr-balance'); if(fr)fr.textContent=v;
 }
 function _stripServerOwned(p,keepCreatedAt){
   const out=Object.assign({},p);
@@ -7684,6 +7696,13 @@ function goToChipShop(returnTo){
       : `<button class="cs-buy ra-buy">$${REMOVE_ADS_PRODUCT.price}</button>`);
   if(!owned)adCard.onclick=()=>buyRemoveAds();
   grid.appendChild(adCard);
+  // ── Restore purchases (Oct 13 2026) — on-demand Play sweep with visible
+  // results. Also the Play-recommended "restore" affordance.
+  const rs=document.createElement('button');
+  rs.className='cs-restore';
+  rs.textContent='↻ Restore purchases';
+  rs.onclick=e=>{ e.stopPropagation(); restorePurchases(true); };
+  grid.appendChild(rs);
   document.getElementById('cs-balance-val').textContent=balance.toLocaleString();
   showScreen('chipshop');
 }
@@ -8120,15 +8139,19 @@ async function storeBuy(productId){
 }
 // Boot-time sweep: anything Play still holds for this account gets verified
 // and finished. Runs once per session, a few seconds after the profile loads.
-async function restorePurchases(){
-  if(_restoreRan)return; _restoreRan=true;
+async function restorePurchases(verbose){
+  if(_restoreRan&&!verbose)return; _restoreRan=true;
+  const say=m=>{ if(verbose)showToast(m,4000); console.log('[billing] restore:',m); };
   try{
     const service=await storeReady();
-    if(!service)return;
+    if(!service){ say('Restore is available in the Android app'); return; }
     await _storeAwaitAuth(8000);
-    if(storeBlockReason()!=='ok'){ console.warn('[billing] restore skipped:',storeBlockReason(),window._bootPath); return; }
-    const list=await service.listPurchases();
-    if(!list||!list.length)return;
+    if(storeBlockReason()!=='ok'){ say('Not signed in yet ('+storeBlockReason()+' · '+(window._bootPath||'?')+')'); return; }
+    let list;
+    try{ list=await service.listPurchases(); }
+    catch(e){ say('Play list failed: '+(e&&e.message?e.message:e)); return; }
+    if(!list||!list.length){ say('Play reports nothing owed to this account'); return; }
+    say('Play reports '+list.length+' purchase'+(list.length>1?'s':'')+' to restore…');
     for(const p of list){
       const productId=p.itemId,token=p.purchaseToken;
       if(!productId||!token)continue;
@@ -8140,11 +8163,12 @@ async function restorePurchases(){
           await _storeFinish(service,productId,token,null);
           await _storeApplyGrant(result);
           if(result.grant==='freeroll'&&!result.already)showToast('Your paid Free Roll is waiting in Rewards 🎲');
+          if(verbose&&result.already)say(productId+': already credited, cleared from Play');
           console.log('[billing] restored',productId,result.already?'(already credited)':'');
-        }else console.warn('[billing] restore skipped',productId,result.reason);
-      }catch(e){ console.warn('[billing] restore failed',productId,e); }
+        }else say(productId+': Google says '+result.reason);
+      }catch(e){ say(productId+': verify failed ('+(e&&e.code?e.code:(e&&e.message)||e)+')'); }
     }
-  }catch(e){ console.warn('[billing] restorePurchases:',e); }
+  }catch(e){ say('Restore error: '+(e&&e.message?e.message:e)); }
 }
 // Browser-only notice (no store outside the Play app).
 function showStoreOnlyNotice(what){
