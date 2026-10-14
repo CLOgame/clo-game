@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-14a';
+  window.CLO_BUILD = '2026-10-14b';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -2528,9 +2528,16 @@ html,body{
   position:relative;width:100%;
 }
 .mp-bank-open{
-  flex-basis:100%;text-align:center;
-  font-family:'Bebas Neue',sans-serif;font-size:.95rem;letter-spacing:.1em;
-  color:#9fe3ff;margin:-2px 0 2px;
+  /* Ribbon ABOVE the bet panel. The panel is a fixed-height strip on phones
+     (84px) and desktop (112px), so a line inside its flex row wrapped the
+     chips to a second row that the fixed height clipped — on a phone the only
+     thing left on screen was the top of one chip. Absolute + negative top
+     puts the ribbon over the felt's bottom edge and costs the panel nothing. */
+  position:absolute;left:0;right:0;top:-22px;height:22px;line-height:22px;
+  text-align:center;pointer-events:none;z-index:1;
+  background:linear-gradient(0deg,rgba(4,10,18,.92),rgba(4,10,18,.55));
+  font-family:'Bebas Neue',sans-serif;font-size:.9rem;letter-spacing:.1em;
+  color:#9fe3ff;
 }
 .mp-bank-open b{color:#fff;}
 .mp-bank-open.under{color:#ffc46b;}
