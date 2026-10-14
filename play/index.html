@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-14b';
+  window.CLO_BUILD = '2026-10-14c';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -10291,8 +10291,17 @@ function mpMyBetAmount(){
 
 // Set the bet to an ABSOLUTE amount (used by All In).
 // Optimistic — the listener will re-render.
+// Bets are only writable DURING the betting phase. A tap that lands after the
+// host's lock write used to leave a stray 'pending'/'bet' the round could not
+// digest (the host roll guard refused forever).
+function mpBettingOpen(){
+  const r=_mpRoom&&_mpRoom.round;
+  if(r&&r.phase==='betting')return true;
+  showToast('Bets are locked');
+  return false;
+}
 function mpSetBet(amount){
-  if(!_mpRoomRef||!_mpMyUid)return;
+  if(!_mpRoomRef||!_mpMyUid||!mpBettingOpen())return;
   const myBalance=mpGetMyBalance(_mpRoom);
   if(amount>myBalance){
     showToast('Not enough chips');
@@ -10338,7 +10347,7 @@ function mpAddBet(amount){
 
 // Clear the stack — back to 'pending' so the bet can be rebuilt from scratch.
 function mpClearBet(){
-  if(!_mpRoomRef||!_mpMyUid)return;
+  if(!_mpRoomRef||!_mpMyUid||!mpBettingOpen())return;
   _mpRoomRef.child('round/bets/'+_mpMyUid).update({
     status:'pending',
     amount:0
@@ -10348,7 +10357,7 @@ function mpClearBet(){
   });
 }
 function mpPlacePass(){
-  if(!_mpRoomRef||!_mpMyUid)return;
+  if(!_mpRoomRef||!_mpMyUid||!mpBettingOpen())return;
   _mpRoomRef.child('round/bets/'+_mpMyUid).update({
     status:'pass',
     amount:0
@@ -11421,10 +11430,22 @@ function mpHostRollBank(){
     // including after instant wins/losses. This catches any race where the
     // phase advanced past 'betting' but a bet entry didn't lock cleanly.
     const bets=r.bets||{};
-    const stillPending=Object.values(bets).filter(b=>b&&b.status==='pending');
+    const stillPending=Object.keys(bets).filter(u=>bets[u]&&bets[u].status==='pending');
     if(stillPending.length>0){
-      console.log('[mpHostRollBank] skipped — still waiting on',stillPending.length,'bets');
-      return;
+      if(r.phase==='pre-roll'){
+        // Betting is CLOSED, so a 'pending' here is a tap (clear/rebuild) that
+        // landed after the lock write — the finalize passed everything that
+        // was pending at lock time. Pending always carries amount 0, so
+        // passing it loses nobody money. Write the pass and carry on rolling;
+        // refusing forever is how the Oct 14 table got stuck.
+        const fix={};
+        stillPending.forEach(u=>{ fix['bets/'+u+'/status']='pass'; fix['bets/'+u+'/amount']=0; });
+        console.warn('[mpHostRollBank] late pending after lock — passing',stillPending.join(','));
+        _mpRoomRef.child('round').update(fix).catch(e=>console.error('late-pass write failed',e));
+      }else{
+        console.log('[mpHostRollBank] skipped — still waiting on',stillPending.length,'bets');
+        return;
+      }
     }
   }
   // Roll honest dice — NO dampeners in multiplayer (human-vs-human is fair)
