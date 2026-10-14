@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-13f';
+  window.CLO_BUILD = '2026-10-14a';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -2014,6 +2014,26 @@ html,body{
 .pr-go-btn:disabled{opacity:.4;background:linear-gradient(135deg,#888,#666);box-shadow:0 5px 0 #333;}
 .pr-go-btn.join{background:linear-gradient(135deg,#5ce4ff,#00b4e0 50%,#0080a8);box-shadow:0 5px 0 #005878,0 7px 18px rgba(0,180,224,.35);}
 
+/* Bank stake / minimum bet pickers on the host setup screen */
+.pr-pick-row{width:100%;margin-top:10px;}
+.pr-pick-label{
+  font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;
+  color:rgba(255,255,255,.55);margin:0 0 6px 2px;
+}
+.pr-pick-hint{letter-spacing:.02em;text-transform:none;color:rgba(255,255,255,.4);margin-left:6px;}
+.pr-pick-chips{display:flex;flex-wrap:wrap;gap:6px;}
+.pr-pick-chip{
+  background:rgba(0,0,0,.32);color:rgba(255,255,255,.8);
+  border:1.5px solid rgba(255,255,255,.14);border-radius:999px;
+  padding:7px 13px;cursor:pointer;
+  font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:.07em;
+}
+.pr-pick-chip.on{
+  background:linear-gradient(160deg,#e6c878 0%,#b8882a 60%,#8a6018 100%);
+  color:#1a0d04;border-color:#5a3a08;
+}
+.pr-pick-chip:disabled{opacity:.3;cursor:not-allowed;}
+
 /* Public/private table toggle on the host setup screen */
 .pr-visibility-row{
   width:100%;
@@ -2507,6 +2527,15 @@ html,body{
      the felt on the joining player's screen. */
   position:relative;width:100%;
 }
+.mp-bank-open{
+  flex-basis:100%;text-align:center;
+  font-family:'Bebas Neue',sans-serif;font-size:.95rem;letter-spacing:.1em;
+  color:#9fe3ff;margin:-2px 0 2px;
+}
+.mp-bank-open b{color:#fff;}
+.mp-bank-open.under{color:#ffc46b;}
+.mp-bank-open.under .warn{color:#ffb347;}
+.mp-bank-open.covered{color:#7ce850;}
 .mp-bet-countdown{
   font-family:'Bebas Neue',sans-serif;
   font-size:.95rem;letter-spacing:.08em;
@@ -5874,6 +5903,16 @@ html,body{
       </div>
       <div class="pr-note">As host, you play as the Bank. Your full balance backs the table and covers shooter payouts — you can leave at any time to stop. You need at least $100,000 to host.</div>
 
+      <!-- Bank stake + minimum bet (Oct 14 2026). Rendered by prRenderStakePickers(). -->
+      <div class="pr-pick-row" id="pr-stake-row">
+        <div class="pr-pick-label">Bank stake <span class="pr-pick-hint">the most the bank puts up per hand</span></div>
+        <div class="pr-pick-chips" id="pr-stake-chips"></div>
+      </div>
+      <div class="pr-pick-row" id="pr-minbet-row">
+        <div class="pr-pick-label">Minimum bet <span class="pr-pick-hint">smallest bet a shooter can lock in</span></div>
+        <div class="pr-pick-chips" id="pr-minbet-chips"></div>
+      </div>
+
       <!-- Public/private toggle — when ON, the table shows up in the lobby's
            Open Tables list so any player can join. Default is OFF so hosts
            who only want to play with friends (via the 5-char code) aren't
@@ -8918,12 +8957,49 @@ function prShowHostSetup(){
       // minimum of 100,000 is held" was accurate. Since the whole-purse
       // change the table is seeded with the host's ENTIRE balance, and the
       // old wording told a host with 100M that only 100K was at risk.
-      note.innerHTML='As host, you play as the Bank. Your <b>full balance of $'+
-        (balance||0).toLocaleString()+'</b> backs the table and covers shooter '+
-        'payouts \u2014 you can leave the table at any time to stop.';
+      note.innerHTML='As host, you play as the Bank. Each hand the bank puts up your '+
+        '<b>stake</b>; your purse of <b>$'+(balance||0).toLocaleString()+'</b> backs it. '+
+        'Shooters can only bet into what the bank has open \u2014 you can leave at any time to stop.';
     }
   }
+  prRenderStakePickers();
   prShowView('host');
+}
+
+// Bank stake + minimum bet chip rows on the Host a Table panel. Presets the
+// host cannot afford are greyed. A stake choice above the current purse falls
+// back to ALL IN; a minimum above the stake falls back to NONE.
+function prEffectiveStake(){
+  if(_prStakeChoice==='all')return balance||0;
+  return Math.min(_prStakeChoice,balance||0);
+}
+function prRenderStakePickers(){
+  const sc=document.getElementById('pr-stake-chips');
+  const mc=document.getElementById('pr-minbet-chips');
+  if(!sc||!mc)return;
+  if(_prStakeChoice!=='all'&&_prStakeChoice>(balance||0))_prStakeChoice='all';
+  sc.innerHTML='';
+  PR_STAKE_PRESETS.concat(['all']).forEach(v=>{
+    const b=document.createElement('button');
+    b.type='button';
+    b.className='pr-pick-chip'+(v===_prStakeChoice?' on':'');
+    b.textContent=(v==='all')?'ALL IN':fmtChips(v);
+    b.disabled=(v!=='all'&&v>(balance||0));
+    b.onclick=()=>{ _prStakeChoice=v; prRenderStakePickers(); };
+    sc.appendChild(b);
+  });
+  const stake=prEffectiveStake();
+  if(_prMinBetChoice>stake)_prMinBetChoice=0;
+  mc.innerHTML='';
+  PR_MIN_BET_PRESETS.forEach(v=>{
+    const b=document.createElement('button');
+    b.type='button';
+    b.className='pr-pick-chip'+(v===_prMinBetChoice?' on':'');
+    b.textContent=(v===0)?'NONE':fmtChips(v);
+    b.disabled=(v>stake);
+    b.onclick=()=>{ _prMinBetChoice=v; prRenderStakePickers(); };
+    mc.appendChild(b);
+  });
 }
 
 async function prPromptCreateAccount(){
@@ -9053,6 +9129,10 @@ function prCreateRoom(){
     hostAvatarId:String(prof.avatarId||'crown'),
     hostTier:String(prof.lastSeenTier||(getStatus(prof.totalEarned||0)||{}).name||'Shorty'),
     bankroll:(balance||PR_HOST_BANKROLL),
+    // Bank solvency (14a): the most the bank puts up per hand, and the table
+    // minimum. Both plain numbers (RTDB rejects undefined).
+    stake:Number(prEffectiveStake()||balance||PR_HOST_BANKROLL),
+    minBet:Number(_prMinBetChoice||0),
     public:!!isPublic,
     status:'waiting',
     createdAt:Date.now(),
@@ -9553,13 +9633,19 @@ function mpEnterTable(roomRef,isHost){
 // Chip preset buttons shown during the betting phase. Order = display order.
 // (Future: scale tiers up for higher-bankroll rooms; v75 launches with $100K.)
 const MP_CHIP_PRESETS=[1000,5000,10000,25000];  // last button is always "All In"
-// Per-hand ceiling for any one shooter in multiplayer. Limits how much a
-// single hand can take off the bank — a shooter holding millions could
-// otherwise wager all of it against a far smaller bankroll.
-// NOTE: this is a blast-radius limit, NOT a solvency guarantee. Several
-// shooters at the cap can still exceed what the bank holds; that needs a
-// bankroll-derived cap, which is still open.
-const MP_MAX_BET=100000;
+// BANK SOLVENCY (Oct 14 2026, build 14a). The old flat 100,000 per-hand cap
+// is RETIRED. The cap is now the bank itself: the host picks a STAKE at table
+// creation (the most the bank puts up per hand; ALL IN = whole purse, which is
+// the old behaviour) and the OPEN bank — stake minus what other shooters
+// already have down — is every shooter's ceiling. Overlaps are settled in
+// seat order at lock (first in the room, first served). An optional table
+// MINIMUM BET is enforced at lock too: a stack under it is not a bet yet, and
+// scraps below the minimum are swept onto the earliest seat that can cover
+// them so no dead chips stay on the felt.
+const PR_STAKE_PRESETS=[100000,250000,500000,1000000];   // + ALL IN
+const PR_MIN_BET_PRESETS=[0,1000,5000,25000,100000];     // 0 = no minimum
+let _prStakeChoice='all';   // 'all' or a number from PR_STAKE_PRESETS
+let _prMinBetChoice=0;
 // How long the host waits after the LAST bet change before rolling. Chips
 // now STACK, so this clock restarts on every tap — 3s was too tight to add
 // a second chip, and in a heads-up game (one non-bank bettor) it fired the
@@ -9722,7 +9808,8 @@ function mpHandleRoundState(room){
       mpHideBetPanel();
       mpSetTurnPill(null);
       mpSetMsg('Bank is ready to roll');
-      mpSetLog('Round '+round.number+' — bets locked, bank about to shake');
+      mpSetLog('Round '+round.number+' — bets locked'+(round.lockNotes?' · '+round.lockNotes:'')+' — bank about to shake');
+      if(round.lockNotes&&_mpLockNoteKey!==round.number){ _mpLockNoteKey=round.number; showToast(round.lockNotes,4000); }
       mpClearBankDice();
       mpSetBankResult('','');
       mpRenderShooterArea(round,null);  // clear shooter dice — bank's turn now
@@ -9970,7 +10057,10 @@ function mpRenderBettingPhase(room,round){
       mpSetMsg(`Waiting on ${pendingNames.length} players to bet…`);
     }
   }else if(myBet&&myBet.status==='bet'){
-    mpSetMsg('You bet $'+myBet.amount.toLocaleString());
+    const mn=mpMinBet(room);
+    mpSetMsg((mn>0&&myBet.amount<mn)
+      ? 'You bet $'+myBet.amount.toLocaleString()+' \u2014 table minimum is $'+mn.toLocaleString()
+      : 'You bet $'+myBet.amount.toLocaleString());
   }else if(myBet&&myBet.status==='pass'){
     mpSetMsg('You passed this round');
   }else{
@@ -10003,7 +10093,8 @@ function mpRenderBettingPhase(room,round){
   // until the bank rolls. This gives a beat to flip your mind even after
   // tapping a chip, without forcing the full 20s wait when everyone's ready.
   if(_mpIsHost){
-    const allIn=Object.values(bets).every(b=>b&&b.status!=='pending');
+    // A stack under the table minimum is not locked yet (14a).
+    const allIn=Object.values(bets).every(b=>b&&(b.status==='pass'||mpBetMeetsMin(room,b)));
     if(allIn&&Object.keys(bets).length>0){
       const sig=Object.keys(bets).sort().map(u=>u+':'+bets[u].status+':'+(bets[u].amount||0)).join('|');
       mpHostScheduleEarlyClose(round,sig);
@@ -10018,6 +10109,7 @@ function mpRenderBettingPhase(room,round){
 // phase='pre-roll' after the window — same as the normal timer expiry.
 let _mpEarlyCloseTimer=null;
 let _mpEarlyCloseSig=null;
+let _mpLockNoteKey=null;   // round number whose lock notes were already toasted
 // sig = a fingerprint of everyone's current bet. While it keeps changing the
 // player is still adjusting, so the countdown restarts instead of running out
 // underneath them. Only once the table goes quiet for MP_EARLY_CLOSE_MS does
@@ -10050,9 +10142,11 @@ function mpBuildBetStatusLog(room,round){
     const name=s.username||'P';
     if(!b||b.status==='pending')parts.push(`⏳ ${name}`);
     else if(b.status==='pass')parts.push(`✕ ${name} pass`);
-    else if(b.status==='bet')parts.push(`✓ ${name} $${b.amount.toLocaleString()}`);
+    else if(b.status==='bet')parts.push((mpBetMeetsMin(room,b)?'✓ ':'⚠ ')+`${name} $${b.amount.toLocaleString()}`);
   }
-  return parts.join(' · ')||'Waiting for players to join…';
+  const open=mpBankOpen(room,null);
+  const head='🏦 $'+open.toLocaleString()+' open';
+  return head+' · '+(parts.join(' · ')||'Waiting for players to join…');
 }
 
 // Show the bet panel — chip preset buttons + Pass.
@@ -10080,12 +10174,30 @@ function mpShowBetPanel(room,round){
   cd.textContent='20s';
   panel.appendChild(cd);
 
+  // BANK OPEN line (14a): how much of the bank is still uncovered by OTHER
+  // shooters, the table minimum, and whether my own stack has reached it.
+  const openExcl=mpBankOpen(room,_mpMyUid);
+  const minBet=mpMinBet(room);
+  const myCur=mpMyBetAmount();
+  const myMax=Math.min(myBalance,openExcl);
+  const info=document.createElement('div');
+  info.className='mp-bank-open';
+  const underMin=(minBet>0&&myCur>0&&myCur<minBet);
+  if(underMin)info.classList.add('under');
+  if(openExcl-myCur<=0&&myCur>0)info.classList.add('covered');
+  info.innerHTML='BANK: <b>$'+Math.max(0,openExcl-myCur).toLocaleString()+'</b> OPEN'+
+    (minBet>0?' · MIN <b>$'+minBet.toLocaleString()+'</b>':'')+
+    (underMin?' · <span class="warn">UNDER MINIMUM</span>':'');
+  panel.appendChild(info);
+
   // Chip preset buttons — round poker chips matching single-player (.b-chip).
   // Colors cycle through SP's bc1–bc5 palette by position.
   MP_CHIP_PRESETS.forEach((amt,i)=>{
     const btn=document.createElement('button');
     btn.className='mp-chip-btn bchip bc'+((i%5)+1);
-    const canAfford=myBalance>=amt;
+    // A chip is tappable while there is still room to add ANYTHING (mpAddBet
+    // caps the tap at the ceiling rather than refusing it).
+    const canAfford=myBalance>=amt&&myMax>myCur;
     if(!canAfford)btn.classList.add('disabled');
     btn.disabled=!canAfford;
     btn.textContent='$'+(amt>=1000?(amt/1000)+'K':amt);
@@ -10095,18 +10207,16 @@ function mpShowBetPanel(room,round){
     panel.appendChild(btn);
   });
 
-  // All-In chip (gold). Above the per-hand cap this is NOT all in — calling it
-  // that while it wagers a fraction of the stack reads as a bug.
-  if(myBalance>0){
+  // All-In chip (gold). When the bank has less open than my stack, this bets
+  // what the bank can take and is labelled COVER rather than ALL IN — calling
+  // it all-in while it wagers a fraction of the stack reads as a bug.
+  if(myBalance>0&&myMax>0){
     const allInBtn=document.createElement('button');
     allInBtn.className='mp-chip-btn bchip bchip-allin';
-    const capped=myBalance>MP_MAX_BET;
-    const amt=capped?MP_MAX_BET:myBalance;
-    allInBtn.innerHTML=capped
-      ? 'MAX<br>$'+(MP_MAX_BET/1000)+'K'
-      : 'ALL<br>IN';
-    allInBtn.title=(capped?'Max bet: $':'All in: $')+amt.toLocaleString();
-    allInBtn.onclick=()=>mpSetBet(amt);   // absolute, not additive
+    const capped=openExcl<myBalance;
+    allInBtn.innerHTML=capped?'COVER<br>$'+fmtChips(myMax):'ALL<br>IN';
+    allInBtn.title=(capped?'Cover the bank: $':'All in: $')+myMax.toLocaleString();
+    allInBtn.onclick=()=>mpSetBet(myMax);   // absolute, not additive
     panel.appendChild(allInBtn);
   }
 
@@ -10134,6 +10244,38 @@ function mpHideBetPanel(){
   if(_mpBetTimerId){clearInterval(_mpBetTimerId);_mpBetTimerId=null;}
 }
 
+// ── Bank solvency helpers (14a) ──────────────────────────────────────────
+// The bank's money on the table this hand: the stake, but never more than the
+// purse behind it. Rooms made before 14a have no stake → whole purse (old
+// behaviour).
+function mpBankCap(room){
+  const br=(room&&room.bankroll)||0;
+  const st=(room&&typeof room.stake==='number'&&room.stake>0)?room.stake:br;
+  return Math.max(0,Math.min(st,br));
+}
+// What is still OPEN for a bet, ignoring excludeUid's own bet (so a shooter's
+// ceiling is open-excluding-me, and raising their own bet is not blocked by
+// the chips they already have down).
+function mpBankOpen(room,excludeUid){
+  const bets=(room&&room.round&&room.round.bets)||{};
+  let used=0;
+  for(const u in bets){
+    if(u===excludeUid)continue;
+    const b=bets[u];
+    if(b&&b.status==='bet'&&b.amount>0)used+=b.amount;
+  }
+  return Math.max(0,mpBankCap(room)-used);
+}
+function mpMinBet(room){
+  return (room&&typeof room.minBet==='number'&&room.minBet>0)?room.minBet:0;
+}
+// A bet counts as LOCKED only once it meets the table minimum. Below it the
+// stack is still being built: the early-close countdown ignores it and the
+// 20s clock passes it.
+function mpBetMeetsMin(room,b){
+  return !!(b&&b.status==='bet'&&b.amount>0&&b.amount>=mpMinBet(room));
+}
+
 // What am I currently in for this round? 0 if I haven't bet or I passed.
 function mpMyBetAmount(){
   const b=_mpRoom&&_mpRoom.round&&_mpRoom.round.bets&&_mpRoom.round.bets[_mpMyUid];
@@ -10149,12 +10291,14 @@ function mpSetBet(amount){
     showToast('Not enough chips');
     return;
   }
-  // PER-HAND CAP. Enforced HERE rather than on the chip buttons, because the
-  // buttons are additive (mpAddBet) and All In calls this directly with the
-  // whole stack — gating the buttons alone would be bypassed by both.
-  if(amount>MP_MAX_BET){
-    amount=MP_MAX_BET;
-    showToast('Max bet is $'+MP_MAX_BET.toLocaleString()+' per hand');
+  // BANK CAP (14a). Enforced HERE rather than on the chip buttons, because the
+  // buttons are additive (mpAddBet) and All In calls this directly — gating
+  // the buttons alone would be bypassed by both. Ceiling = what the bank has
+  // open once everyone else's bets are counted.
+  const openExcl=mpBankOpen(_mpRoom,_mpMyUid);
+  if(amount>openExcl){
+    amount=openExcl;
+    showToast(amount>0?'Bank is covered at $'+amount.toLocaleString():'Bank is covered — nothing left to bet');
   }
   if(amount<=0)return;
   _mpRoomRef.child('round/bets/'+_mpMyUid).update({
@@ -10172,15 +10316,14 @@ function mpAddBet(amount){
   if(!_mpRoomRef||!_mpMyUid)return;
   const myBalance=mpGetMyBalance(_mpRoom);
   if(myBalance<=0){showToast('Not enough chips');return;}
-  // Ceiling is whichever runs out first: your stack or the per-hand cap.
-  const ceiling=Math.min(myBalance,MP_MAX_BET);
+  // Ceiling is whichever runs out first: your stack or the open bank.
+  const openExcl=mpBankOpen(_mpRoom,_mpMyUid);
+  const ceiling=Math.min(myBalance,openExcl);
   const cur=mpMyBetAmount();
   const next=Math.min(cur+amount,ceiling);
-  if(next<=0)return;
+  if(next<=0){showToast('Bank is covered — nothing left to bet');return;}
   if(next===cur){
-    showToast(cur>=MP_MAX_BET
-      ? 'Max bet is $'+MP_MAX_BET.toLocaleString()+' per hand'
-      : 'Already all in');
+    showToast(cur>=openExcl?'Bank is covered':'Already all in');
     return;
   }
   mpSetBet(next);
@@ -10251,25 +10394,64 @@ function mpHostFinalizeBetting(round){
   // Avoid double-firing
   if(round.phase!=='betting')return;
   const bets=round.bets||{};
-  // Count REAL bets (money down). Pending players are auto-passed below, so
-  // they don't count. A 'pass' that still carries money is repaired to a bet.
+  const room=_mpRoom||{};
+  const seats=room.seats||{};
+  const minBet=mpMinBet(room);
   const updates={phase:'pre-roll'};
-  let liveBets=0;
+  const notes=[];
+  const nameOf=uid=>{ const s=mpFindSeatByUid(room,uid); return (s&&s.username)||'Player'; };
+  const pass=(uid,why)=>{ updates['bets/'+uid+'/status']='pass'; updates['bets/'+uid+'/amount']=0; if(why)notes.push(nameOf(uid)+' '+why); };
+  // 1. Anyone still pending is passed.
   for(const uid in bets){
-    if(mpIsLiveBet(uid,bets[uid],updates))liveBets++;
+    if(bets[uid]&&bets[uid].status==='pending')pass(uid,null);
   }
-  if(liveBets===0){
-    // Nobody put money down → there's nothing to play for. Don't make the bank
-    // roll to itself; skip straight to the no-bets round result.
+  // 2. SEAT ORDER (14a): walk the seats; each live bet takes what the bank
+  //    still has open, so overlaps go to the earlier seat. A bet that lands
+  //    under the table minimum after trimming is passed. A 'pass' that still
+  //    carries money is repaired to a bet first (mpIsLiveBet).
+  let remaining=mpBankCap(room);
+  const live=[];
+  const seen={};
+  for(let i=0;i<PR_MAX_SEATS;i++){
+    const s=seats[i];
+    if(!s||!s.uid)continue;
+    seen[s.uid]=true;
+    const b=bets[s.uid];
+    if(!b||b.status==='pending')continue;
+    if(!mpIsLiveBet(s.uid,b,updates))continue;
+    let amt=b.amount;
+    if(amt>remaining)amt=remaining;
+    if(amt<=0){ pass(s.uid,'\u2014 bank covered'); continue; }
+    if(minBet>0&&amt<minBet){ pass(s.uid,'\u2014 under the $'+minBet.toLocaleString()+' minimum'); continue; }
+    if(amt!==b.amount){ updates['bets/'+s.uid+'/amount']=amt; notes.push(nameOf(s.uid)+' trimmed to $'+amt.toLocaleString()); }
+    remaining-=amt;
+    live.push({uid:s.uid,seat:i,amt});
+  }
+  // 3. A bet with no seat behind it (the player left) cannot be paid — pass.
+  for(const uid in bets){
+    if(!seen[uid]&&bets[uid]&&bets[uid].status!=='pass')pass(uid,null);
+  }
+  // 4. SCRAPS: open money below the minimum is swept onto the earliest seat
+  //    with a bet that can cover it, so the bank ends fully covered.
+  if(remaining>0&&minBet>0&&remaining<minBet){
+    for(const l of live){
+      const bal=(seats[l.seat]&&seats[l.seat].balance)||0;
+      if(bal>=l.amt+remaining){
+        updates['bets/'+l.uid+'/amount']=l.amt+remaining;
+        notes.push('+$'+remaining.toLocaleString()+' swept to '+nameOf(l.uid));
+        l.amt+=remaining; remaining=0; break;
+      }
+    }
+  }
+  if(live.length===0){
+    // Nobody has money down → nothing to play for. Don't make the bank roll
+    // to itself; skip straight to the no-bets round result.
     mpHostFinalizeRoundNoBets();
     return;
   }
-  for(const uid in bets){
-    if(bets[uid]&&bets[uid].status==='pending'){
-      updates['bets/'+uid+'/status']='pass';
-      updates['bets/'+uid+'/amount']=0;
-    }
-  }
+  if(remaining===0)notes.push('bank fully covered');
+  updates['bankCovered']=(remaining===0);
+  updates['lockNotes']=notes.length?notes.join(' \u00b7 '):null;
   _mpRoomRef.child('round').update(updates).catch(err=>{
     console.error('Finalize betting failed',err);
   });
@@ -10886,6 +11068,7 @@ function mpHostApplySettlement(summary,bankDelta){
 
   // Bank (host) bankroll update
   const bankBefore=_mpRoom.bankroll||0;
+  if(bankBefore+bankDelta<0)console.error('[mp] BANK SHORTFALL — bets exceeded the bankroll',bankBefore,bankDelta);
   updates['bankroll']=Math.max(0,bankBefore+bankDelta);
 
   // Round status
@@ -15672,7 +15855,8 @@ function renderOpenTables(rooms){
     const name=(room.hostName||'Host').slice(0,18);
     // Best-effort description — we don't have room tier on private tables yet,
     // so show "Private Table" as the room descriptor for now.
-    const desc='Bank: $'+((room.bankroll||0).toLocaleString());
+    const cap=mpBankCap(room), mn=mpMinBet(room);
+    const desc='Bank: $'+cap.toLocaleString()+(mn>0?' · min $'+mn.toLocaleString():' · no minimum');
     const hostBadge=seatBadgeHTML({avatarId:room.hostAvatarId,avatarEmoji:room.hostAvatar,avatarColor:room.hostColor,tier:room.hostTier},28);
     html+=`<div class="lot-row" onclick="joinOpenTable('${r.code}')">`
        + hostBadge
