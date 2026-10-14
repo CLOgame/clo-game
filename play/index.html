@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-14c';
+  window.CLO_BUILD = '2026-10-14d';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -2373,6 +2373,7 @@ html,body{
 
 /* Table area */
 .mp-table-wrap{
+  position:relative;   /* anchors #mp-callout */
   flex:1;min-height:0;
   margin:8px 12px 4px;padding:10px;
   background:
@@ -2579,6 +2580,13 @@ html,body{
   box-shadow:0 3px 0 #4a2d05,0 5px 12px rgba(0,0,0,.45);
 }
 .mp-chip-allin:active{box-shadow:0 1px 0 #4a2d05,0 2px 6px rgba(0,0,0,.45);}
+.mp-chip-stop{
+  background:linear-gradient(160deg,#ff5a3c 0%,#b8200c 55%,#5a0a04 100%) !important;
+  border-color:#ffd27a !important;color:#fff8e0 !important;
+  box-shadow:0 0 16px rgba(255,90,60,.55),0 3px 0 #3a0603 !important;
+  animation:stopPulse 1.1s ease-in-out infinite alternate;
+}
+@keyframes stopPulse{0%{transform:scale(1);}100%{transform:scale(1.05);}}
 .mp-chip-pass{
   background:linear-gradient(160deg,#7a2828 0%,#4a1010 60%,#2a0606 100%);
   border-color:#a04040;color:#ffd0d0;
@@ -6051,6 +6059,9 @@ html,body{
 
   <!-- Main table -->
   <div class="mp-table-wrap">
+    <!-- BANK STOPPED / BANK BUSTED headline (Oct 14 2026). Same .callout look
+         as single-player's Headcrack flash; positioned over the MP felt. -->
+    <div class="callout" id="mp-callout"><div class="callout-text" id="mp-callout-text"></div></div>
     <div class="mp-felt-inner" id="mp-felt-inner">
 
       <!-- Dice stage — physics engine (animateFelt) renders dice here. -->
@@ -9817,6 +9828,13 @@ function mpHandleRoundState(room){
       mpSetMsg('Bank is ready to roll');
       mpSetLog('Round '+round.number+' — bets locked'+(round.lockNotes?' · '+round.lockNotes:'')+' — bank about to shake');
       if(round.lockNotes&&_mpLockNoteKey!==round.number){ _mpLockNoteKey=round.number; showToast(round.lockNotes,4000); }
+      // BANK STOPPED: the bank is fully covered — by one stop or by the seats
+      // together. Flash it once per round for everyone.
+      if(round.bankCovered&&_mpStopCalloutKey!==round.number){
+        _mpStopCalloutKey=round.number;
+        mpShowCallout('BANK STOPPED','stop');
+        soundBankStop();
+      }
       mpClearBankDice();
       mpSetBankResult('','');
       mpRenderShooterArea(round,null);  // clear shooter dice — bank's turn now
@@ -10100,6 +10118,8 @@ function mpRenderBettingPhase(room,round){
   // until the bank rolls. This gives a beat to flip your mind even after
   // tapping a chip, without forcing the full 20s wait when everyone's ready.
   if(_mpIsHost){
+    // STOP THE BANK (Piece 2): a valid stop request ends betting right now.
+    if(mpFindStop(room,round)){ mpHostFinalizeBetting(round); return; }
     // A stack under the table minimum is not locked yet (14a).
     const allIn=Object.values(bets).every(b=>b&&(b.status==='pass'||mpBetMeetsMin(room,b)));
     if(allIn&&Object.keys(bets).length>0){
@@ -10117,6 +10137,7 @@ function mpRenderBettingPhase(room,round){
 let _mpEarlyCloseTimer=null;
 let _mpEarlyCloseSig=null;
 let _mpLockNoteKey=null;   // round number whose lock notes were already toasted
+let _mpStopCalloutKey=null;   // round number whose BANK STOPPED flash already ran
 // sig = a fingerprint of everyone's current bet. While it keeps changing the
 // player is still adjusting, so the countdown restarts instead of running out
 // underneath them. Only once the table goes quiet for MP_EARLY_CLOSE_MS does
@@ -10142,14 +10163,16 @@ function mpBuildBetStatusLog(room,round){
   const bets=round.bets||{};
   const seats=room.seats||{};
   const parts=[];
+  const NUM=['\u2460','\u2461','\u2462','\u2463','\u2464','\u2465'];
+  let n=0;
   for(let i=0;i<PR_MAX_SEATS;i++){
     const s=seats[i];
     if(!s||!s.uid||s.uid===room.hostUid)continue;
     const b=bets[s.uid];
-    const name=s.username||'P';
-    if(!b||b.status==='pending')parts.push(`⏳ ${name}`);
-    else if(b.status==='pass')parts.push(`✕ ${name} pass`);
-    else if(b.status==='bet')parts.push((mpBetMeetsMin(room,b)?'✓ ':'⚠ ')+`${name} $${b.amount.toLocaleString()}`);
+    const name=(NUM[n++]||'')+' '+(s.username||'P');
+    if(!b||b.status==='pending')parts.push(`${name} ⏳`);
+    else if(b.status==='pass')parts.push(`${name} pass`);
+    else if(b.status==='bet')parts.push(`${name} $${b.amount.toLocaleString()}`+(b.stop?' STOP':'')+(mpBetMeetsMin(room,b)?' ✓':' ⚠'));
   }
   const open=mpBankOpen(room,null);
   const head='🏦 $'+open.toLocaleString()+' open';
@@ -10192,10 +10215,23 @@ function mpShowBetPanel(room,round){
   const underMin=(minBet>0&&myCur>0&&myCur<minBet);
   if(underMin)info.classList.add('under');
   if(openExcl-myCur<=0&&myCur>0)info.classList.add('covered');
+  const pos=mpShooterPos(room,_mpMyUid);
   info.innerHTML='BANK: <b>$'+Math.max(0,openExcl-myCur).toLocaleString()+'</b> OPEN'+
     (minBet>0?' · MIN <b>$'+minBet.toLocaleString()+'</b>':'')+
+    (pos?' · YOU\u2019RE '+mpOrdinal(pos).toUpperCase():'')+
     (underMin?' · <span class="warn">UNDER MINIMUM</span>':'');
   panel.appendChild(info);
+
+  // STOP THE BANK chip — only when my stack covers the WHOLE bank (Piece 2).
+  const cap=mpBankCap(room);
+  if(cap>0&&myBalance>=cap){
+    const stopBtn=document.createElement('button');
+    stopBtn.className='mp-chip-btn bchip mp-chip-stop';
+    stopBtn.innerHTML='STOP<br>$'+fmtChips(cap);
+    stopBtn.title='Stop the bank: bet the whole $'+cap.toLocaleString();
+    stopBtn.onclick=()=>mpStopBank();
+    panel.appendChild(stopBtn);
+  }
 
   // Chip preset buttons — round poker chips matching single-player (.b-chip).
   // Colors cycle through SP's bc1–bc5 palette by position.
@@ -10281,6 +10317,74 @@ function mpMinBet(room){
 // 20s clock passes it.
 function mpBetMeetsMin(room,b){
   return !!(b&&b.status==='bet'&&b.amount>0&&b.amount>=mpMinBet(room));
+}
+// The uid of the earliest VALID stop request this round, or null. Valid =
+// seated, status 'bet', stop:true, and the seat's balance covers the whole
+// bank (re-checked here so a client can't claim a stop it cannot pay).
+function mpFindStop(room,round){
+  const bets=(round&&round.bets)||{};
+  const cap=mpBankCap(room);
+  if(cap<=0)return null;
+  let best=null,bestAt=Infinity;
+  for(const uid in bets){
+    const b=bets[uid];
+    if(!b||b.status!=='bet'||!b.stop)continue;
+    const seat=mpFindSeatByUid(room,uid);
+    if(!seat||(seat.balance||0)<cap)continue;
+    const at=(typeof b.stopAt==='number')?b.stopAt:0;
+    if(at<bestAt){best=uid;bestAt=at;}
+  }
+  return best;
+}
+
+// Felt headline for multiplayer (BANK STOPPED / BANK BUSTED). Mirrors
+// showCallout() but targets the MP overlay. cls: 'stop' (gold) | 'bust' (red).
+function mpShowCallout(txt,cls){
+  const ov=document.getElementById('mp-callout');
+  const lb=document.getElementById('mp-callout-text');
+  if(!ov||!lb)return;
+  lb.textContent=txt;
+  lb.classList.remove('t-clo','t-win','t-lose','t-point');
+  lb.classList.add(cls==='bust'?'t-lose':'t-clo');
+  ov.classList.remove('show');void ov.offsetWidth;ov.classList.add('show');
+  setTimeout(()=>ov.classList.remove('show'),3500);
+}
+function soundBankStop(){
+  try{const ctx=getACtx(),n=ctx.currentTime;
+    tone(196,'square',.22,.32,n);tone(131,'square',.26,.5,n+.16);tone(98,'sawtooth',.2,.7,n+.34);
+  }catch(e){}
+}
+// 1-based position among the SHOOTERS (host excluded), in seat order — the
+// order that decides overlaps at lock. 0 if not seated.
+function mpShooterPos(room,uid){
+  const seats=(room&&room.seats)||{};
+  let n=0;
+  for(let i=0;i<PR_MAX_SEATS;i++){
+    const s=seats[i];
+    if(!s||!s.uid||s.uid===room.hostUid)continue;
+    n++;
+    if(s.uid===uid)return n;
+  }
+  return 0;
+}
+function mpOrdinal(n){ return n+(['th','st','nd','rd'][(n%100>>3^1&&n%10)||0]); }
+// STOP THE BANK (Piece 2): one bet for the WHOLE bank. Rides on my own bet
+// entry (rules only let me write there): status 'bet', amount = the bank cap,
+// stop:true + stopAt. The host's listener resolves it — my bet takes the
+// full stake, every other bet is cancelled, betting locks immediately.
+async function mpStopBank(){
+  if(!_mpRoomRef||!_mpMyUid||!mpBettingOpen())return;
+  const cap=mpBankCap(_mpRoom);
+  const myBalance=mpGetMyBalance(_mpRoom);
+  if(cap<=0){showToast('Nothing to stop');return;}
+  if(myBalance<cap){showToast('You need $'+cap.toLocaleString()+' to stop the bank');return;}
+  const ok=await showConfirm(
+    'Stop the bank for $'+cap.toLocaleString()+'?\n\nYou take the whole bank this hand. Every other bet on the felt is cancelled.',
+    {title:'STOP THE BANK',okLabel:'Stop it'});
+  if(!ok||!mpBettingOpen())return;
+  _mpRoomRef.child('round/bets/'+_mpMyUid).update({
+    status:'bet',amount:cap,stop:true,stopAt:Date.now()
+  }).catch(err=>{ console.error('Stop bank failed',err); showToast('Could not stop the bank'); });
 }
 
 // What am I currently in for this round? 0 if I haven't bet or I passed.
@@ -10421,6 +10525,26 @@ function mpHostFinalizeBetting(round){
   for(const uid in bets){
     if(bets[uid]&&bets[uid].status==='pending')pass(uid,null);
   }
+  // 1b. STOP THE BANK (Piece 2): the earliest valid stop takes the whole
+  //     bank; every other bet is cancelled (their chips never moved — a bet
+  //     is just a number until settlement). Trumps seat order by design.
+  const stopUid=mpFindStop(room,round);
+  if(stopUid){
+    const cap=mpBankCap(room);
+    for(const uid in bets){
+      if(uid!==stopUid&&bets[uid]&&bets[uid].status!=='pass')pass(uid,null);
+    }
+    updates['bets/'+stopUid+'/status']='bet';
+    updates['bets/'+stopUid+'/amount']=cap;
+    updates['stoppedBy']=stopUid;
+    updates['bankCovered']=true;
+    const others=Object.keys(bets).filter(u=>u!==stopUid&&bets[u]&&bets[u].status==='bet'&&bets[u].amount>0).length;
+    notes.length=0;
+    notes.push(nameOf(stopUid)+' STOPPED THE BANK \u2014 $'+cap.toLocaleString()+(others?' \u00b7 '+others+' bet'+(others>1?'s':'')+' cancelled':''));
+    updates['lockNotes']=notes.join(' \u00b7 ');
+    _mpRoomRef.child('round').update(updates).catch(err=>console.error('Finalize (stop) failed',err));
+    return;
+  }
   // 2. SEAT ORDER (14a): walk the seats; each live bet takes what the bank
   //    still has open, so overlaps go to the earlier seat. A bet that lands
   //    under the table minimum after trimming is passed. A 'pass' that still
@@ -10436,6 +10560,9 @@ function mpHostFinalizeBetting(round){
     if(!b||b.status==='pending')continue;
     if(!mpIsLiveBet(s.uid,b,updates))continue;
     let amt=b.amount;
+    // Never trust a bet above the seat's own chips (the client already caps
+    // this; the host is the one that has to be right).
+    if(typeof s.balance==='number'&&amt>s.balance)amt=s.balance;
     if(amt>remaining)amt=remaining;
     if(amt<=0){ pass(s.uid,'\u2014 bank covered'); continue; }
     if(minBet>0&&amt<minBet){ pass(s.uid,'\u2014 under the $'+minBet.toLocaleString()+' minimum'); continue; }
