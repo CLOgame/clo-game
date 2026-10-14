@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-14d';
+  window.CLO_BUILD = '2026-10-14e';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -10138,6 +10138,7 @@ let _mpEarlyCloseTimer=null;
 let _mpEarlyCloseSig=null;
 let _mpLockNoteKey=null;   // round number whose lock notes were already toasted
 let _mpStopCalloutKey=null;   // round number whose BANK STOPPED flash already ran
+let _mpBustCalloutKey=null;   // round number whose BANK BUSTED flash already ran
 // sig = a fingerprint of everyone's current bet. While it keeps changing the
 // player is still adjusting, so the countdown restarts instead of running out
 // underneath them. Only once the table goes quiet for MP_EARLY_CLOSE_MS does
@@ -10856,15 +10857,20 @@ function mpHostForceRollFor(uid){
 
 // Roll dice until we get a final (non-reroll) outcome
 function mpResolveRollUntilDecided(){
-  for(let safety=0;safety<10;safety++){
+  // A no-pair (reroll) comes up 120/216 = 56% of the time, so TEN in a row
+  // is about 1 in 360 hands — the old cap of 10 fired at real tables, and
+  // its placeholder was dice [1,1,1] labelled 'C-LO': the felt showed Trips
+  // while the log said C-LO (seen Oct 14 2026). 500 tries is 0.556^500 ≈ 0.
+  for(let safety=0;safety<500;safety++){
     const dice=[rollDie(),rollDie(),rollDie()];
     const hand=evalHand(dice);
     if(hand.type!=='reroll'){
       return {dice:dice, label:(hand.type==='point'?'Point-'+hand.point:hand.label), point:hand.point||null, type:hand.type};
     }
   }
-  // Astronomically unlikely fallback
-  return {dice:[1,1,1], label:'C-LO', point:null, type:'win'};
+  // Unreachable in practice; if it ever happens, at least be self-consistent.
+  const dice=[4,5,6], hand=evalHand(dice);
+  return {dice:dice, label:hand.label||'C-LO', point:null, type:hand.type||'win'};
 }
 
 // Compare a shooter's roll to bank's point
@@ -11211,7 +11217,10 @@ function mpHostApplySettlement(summary,bankDelta){
 
   // Bank (host) bankroll update
   const bankBefore=_mpRoom.bankroll||0;
-  if(bankBefore+bankDelta<0)console.error('[mp] BANK SHORTFALL — bets exceeded the bankroll',bankBefore,bankDelta);
+  if(bankBefore+bankDelta<0){
+    console.error('[mp] BANK SHORTFALL — bets exceeded the bankroll',bankBefore,bankDelta);
+    showToast('Bank shortfall — please report this');
+  }
   updates['bankroll']=Math.max(0,bankBefore+bankDelta);
 
   // Round status
@@ -11412,11 +11421,120 @@ function mpRenderSettlementPhase(room,round){
   const lastResult=mpGetLastShooterResult(round);
   if(lastResult&&lastResult.dice)mpRenderShooterArea(round,lastResult);
 
+  // ── BANK BUSTED (Piece 3, Oct 14 2026) ────────────────────────────────
+  // The bank lost its WHOLE stake this hand. The stake it posted was
+  // min(stake, bankroll-before-settlement); bankroll is already updated, so
+  // reconstruct "before" from the round's bankDelta.
+  const bd=round.bankDelta||0;
+  const before=(room.bankroll||0)-bd;
+  const stakeBefore=Math.min((typeof room.stake==='number'&&room.stake>0)?room.stake:before,before);
+  const busted=(bd<0&&stakeBefore>0&&-bd>=stakeBefore);
+  if(busted&&_mpBustCalloutKey!==round.number){
+    _mpBustCalloutKey=round.number;
+    mpShowCallout('BANK BUSTED','bust');
+    try{soundLose();}catch(_){}
+  }
+
   if(_mpIsHost){
-    mpSetActionBtn('Next Round →',()=>mpInitRound((round.number||0)+1));
+    const purse=room.bankroll||0;
+    if(purse<PR_HOST_BANKROLL){
+      // The bank cannot post the table minimum. Sweeten (buy chips) or close.
+      mpSetActionBtn('Bank is broke',null);
+      mpHostShowBrokeBank(purse);
+    }else if(busted){
+      // Re-bank: keep the stake if the purse still covers it, otherwise the
+      // bank posts what it has. Either way the host gets a say.
+      mpSetActionBtn('Sweeten & Next Round →',()=>mpHostSweeten(round));
+    }else{
+      mpSetActionBtn('Next Round →',()=>mpInitRound((round.number||0)+1));
+    }
   }else{
     mpSetActionBtn(null);
+    if(busted&&(room.bankroll||0)<PR_HOST_BANKROLL)mpSetLog('Bank busted \u2014 waiting on the host');
   }
+}
+
+// Host chooses the stake for the next hand (after a bust, or any time the
+// bank wants to put more money up). Same chips as Host a Table, capped at
+// the purse. Writes room.stake, then starts the next round.
+async function mpHostSweeten(round){
+  if(!_mpIsHost||!_mpRoomRef||!_mpRoom)return;
+  const purse=_mpRoom.bankroll||0;
+  const pick=await mpPickStake(purse);
+  if(pick===null)return;              // cancelled — stay on the settlement screen
+  const stake=(pick==='all')?purse:Math.min(pick,purse);
+  try{ await _mpRoomRef.child('stake').set(Number(stake)); }
+  catch(e){ console.error('[mp] stake write failed',e); showToast('Could not set the stake'); return; }
+  showToast('Bank posts $'+stake.toLocaleString()+' \ud83c\udfe6');
+  mpInitRound((round.number||0)+1);
+}
+// PWA-safe stake picker (same card family as confirmPurchase/showConfirm).
+// Resolves a preset number, 'all', or null on cancel.
+function mpPickStake(purse){
+  return new Promise(resolve=>{
+    if(document.querySelector('.stake-pick-overlay')){resolve(null);return;}
+    const overlay=document.createElement('div');
+    overlay.className='popup-overlay stake-pick-overlay';
+    const chips=PR_STAKE_PRESETS.map(v=>
+      `<button type="button" class="pr-pick-chip" data-v="${v}" ${v>purse?'disabled':''}>${fmtChips(v)}</button>`).join('')+
+      `<button type="button" class="pr-pick-chip on" data-v="all">ALL IN</button>`;
+    overlay.innerHTML=`
+      <div class="popup-card confirm-card">
+        <div class="confirm-title">SWEETEN THE BANK</div>
+        <div class="confirm-sub">Your purse is <b>$${purse.toLocaleString()}</b>. How much does the bank put up per hand?</div>
+        <div class="pr-pick-chips" style="justify-content:center;margin:10px 0 4px;">${chips}</div>
+        <div class="confirm-btn-row">
+          <button class="popup-btn popup-btn-secondary" id="stake-cancel">Cancel</button>
+          <button class="popup-btn" id="stake-go">Post it</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    let choice='all';
+    overlay.querySelectorAll('.pr-pick-chip').forEach(b=>{
+      b.onclick=()=>{ overlay.querySelectorAll('.pr-pick-chip').forEach(x=>x.classList.remove('on')); b.classList.add('on'); choice=(b.dataset.v==='all')?'all':Number(b.dataset.v); };
+    });
+    const done=v=>{ overlay.remove(); resolve(v); };
+    overlay.querySelector('#stake-cancel').onclick=()=>done(null);
+    overlay.querySelector('#stake-go').onclick=()=>done(choice);
+    overlay.onclick=e=>{ if(e.target===overlay)done(null); };
+  });
+}
+// The bank cannot post the 100K table minimum: buy chips (the purchase is
+// pushed into room.bankroll by mpPushBalanceToSeat) or close the table.
+let _mpBrokeShown=false;
+function mpHostShowBrokeBank(purse){
+  if(_mpBrokeShown)return; _mpBrokeShown=true;
+  let d=document.getElementById('mp-bankbroke');
+  if(!d){
+    d=document.createElement('div');
+    d.className='gameover';
+    d.id='mp-bankbroke';
+    d.innerHTML=
+      '<div class="go-title">\ud83c\udfe6 Bank is broke</div>'+
+      '<div class="go-sub" id="mp-bankbroke-sub"></div>'+
+      '<div class="go-options">'+
+        '<button class="go-opt go-opt-shop" onclick="mpBrokeShop()">'+
+          '<div class="go-opt-emoji">\ud83d\udcb0</div>'+
+          '<div class="go-opt-text"><div class="go-opt-title">SWEETEN THE BANK</div><div class="go-opt-sub">Buy chips and keep the table open</div></div></button>'+
+        '<button class="go-opt" onclick="mpBrokeClose()">'+
+          '<div class="go-opt-emoji">\ud83d\udeaa</div>'+
+          '<div class="go-opt-text"><div class="go-opt-title">CLOSE TABLE</div><div class="go-opt-sub">Everyone goes back to the lobby</div></div></button>'+
+      '</div>';
+    document.body.appendChild(d);
+  }
+  const sub=document.getElementById('mp-bankbroke-sub');
+  if(sub)sub.textContent='The bank has $'+purse.toLocaleString()+' \u2014 it needs $'+PR_HOST_BANKROLL.toLocaleString()+' to post a hand.';
+  requestAnimationFrame(()=>d.classList.add('show'));
+}
+function mpBrokeShop(){
+  const d=document.getElementById('mp-bankbroke'); if(d)d.classList.remove('show');
+  _mpBrokeShown=false;
+  goToChipShop('mp-game');
+}
+function mpBrokeClose(){
+  const d=document.getElementById('mp-bankbroke'); if(d)d.classList.remove('show');
+  _mpBrokeShown=false;
+  if(typeof mpLeaveTable==='function')mpLeaveTable();
 }
 
 // ── Balance helpers ─────────────────────────────────────────────────────
@@ -11428,7 +11546,14 @@ function mpRenderSettlementPhase(room,round){
 // Firestore, then got overwritten by the stale seat value on the next sync.
 function mpPushBalanceToSeat(){
   if(!_mpRoomRef||!_mpMyUid||!_mpRoom)return;
-  if(_mpIsHost||_mpRoom.hostUid===_mpMyUid)return;  // host balance is the bankroll
+  if(_mpIsHost||_mpRoom.hostUid===_mpMyUid){
+    // Host: the purse IS the bankroll. A chip purchase or claim while hosting
+    // (sweetening a broke bank) has to land in room.bankroll or the next
+    // snapshot resets `balance` to the old figure. Piece 3, Oct 14 2026.
+    _mpRoomRef.child('bankroll').set(balance)
+      .catch(e=>console.warn('[mp] bankroll push failed',e));
+    return;
+  }
   const seats=_mpRoom.seats||{};
   for(const k in seats){
     if(seats[k]&&seats[k].uid===_mpMyUid){
