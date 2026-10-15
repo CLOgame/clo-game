@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-14f';
+  window.CLO_BUILD = '2026-10-15a';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -8135,11 +8135,18 @@ async function _storeVerify(productId,purchaseToken){
 }
 // Finish with Play: consume (consumables) then acknowledge via complete().
 async function _storeFinish(service,productId,purchaseToken,paymentResponse){
-  if(STORE_CONSUMABLES.has(productId)){
-    try{ await service.consume(purchaseToken); }
-    catch(e){ console.warn('[billing] consume failed (restorePurchases will retry):',e); }
-  }
+  // Close the payment sheet FIRST. Consuming while the PaymentRequest is still
+  // open left purchases un-consumed on Oct 13-14 ("You already own this item"
+  // on the next buy) — the chips were credited, only the clear-with-Play step
+  // failed. Then consume, with one retry.
   if(paymentResponse){ try{ await paymentResponse.complete('success'); }catch(_){} }
+  if(STORE_CONSUMABLES.has(productId)){
+    for(let attempt=0;attempt<2;attempt++){
+      try{ await service.consume(purchaseToken); console.log('[billing] consumed',productId); return; }
+      catch(e){ console.warn('[billing] consume failed (attempt '+(attempt+1)+'):',e); await new Promise(r=>setTimeout(r,1200)); }
+    }
+    showToast('Chips credited — tap ↻ Restore purchases if the pack shows as owned');
+  }
 }
 // Apply a verified grant locally. Chips come through the ledger claim;
 // Free Roll skips are claimed on the Free Roll screen; Remove Ads is mirrored.
@@ -8206,6 +8213,16 @@ async function storeBuy(productId){
     // AbortError = the player closed the Play sheet. Anything else is logged.
     if(!(e&&e.name==='AbortError'))console.warn('[billing] purchase failed:',e);
     if(resp){ try{ await resp.complete('fail'); }catch(_){} }
+    // "You already own this item": a consumable Play still holds. Clear it
+    // (verify is idempotent, then consume) so the next tap goes through.
+    const msg=String((e&&e.message)||'');
+    if(/already own|ITEM_ALREADY_OWNED|already_owned/i.test(msg)){
+      _storeBusy=false;
+      showToast('Clearing a held purchase…');
+      _restoreRan=false;
+      await restorePurchases(true);
+      return {ok:false,reason:'already-owned'};
+    }
     return {ok:false,reason:(e&&e.name)||'error'};
   }finally{ _storeBusy=false; }
 }
