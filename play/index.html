@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-15d';
+  window.CLO_BUILD = '2026-10-15e';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -9871,9 +9871,11 @@ function mpHandleRoundState(room){
       mpSetMsg('Bank is ready to roll');
       mpSetLog('Round '+round.number+' — bets locked'+(round.lockNotes?' · '+round.lockNotes:'')+' — bank about to shake');
       if(round.lockNotes&&_mpLockNoteKey!==round.number){ _mpLockNoteKey=round.number; showToast(round.lockNotes,4000); }
-      // BANK STOPPED: the bank is fully covered — by one stop or by the seats
-      // together. Flash it once per round for everyone.
-      if(round.bankCovered&&_mpStopCalloutKey!==round.number){
+      // BANK STOPPED: ONE player took the whole bank with STOP (round.stoppedBy
+      // is written only by the stop branch of mpHostFinalizeBetting). Seats
+      // merely adding up to the bank is just a covered bank — no headline.
+      // (15e, Oct 14 2026 — was keyed on bankCovered, which fired for 4K+96K.)
+      if(round.stoppedBy&&_mpStopCalloutKey!==round.number){
         _mpStopCalloutKey=round.number;
         mpShowCallout('BANK STOPPED','stop');
         soundBankStop();
