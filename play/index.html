@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-15b';
+  window.CLO_BUILD = '2026-10-15c';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -7713,11 +7713,10 @@ function goPremium(){showToast('Premium coming soon! 👑');}
 // first real purchase. Small packs stay live so a busted player can keep
 // playing (150K also still clears the 100K hosting floor); 350K and up show
 // "Coming soon" and do not respond to taps.
-// TO RE-ENABLE: empty this Set, the moment Play Billing is live.
-const CHIP_LOCKED=new Set([
-  'clo_chips_350k','clo_chips_1m','clo_chips_5m','clo_chips_15m',
-  'clo_chips_25m','clo_chips_50m','clo_chips_100m'
-]);
+// Oct 14 2026: Play Billing is live and all ten packs exist in Play Console,
+// so nothing is locked. To pull a pack from sale, put its productId back in
+// this Set (it shows COMING SOON and refuses taps).
+const CHIP_LOCKED=new Set([]);
 function chipPackLocked(productId){ return CHIP_LOCKED.has(productId); }
 
 const CHIP_TIERS=[
@@ -8993,8 +8992,8 @@ function prShowHostSetup(){
     btn.onclick=prPromptBuyChips;
     if(note){
       note.innerHTML='You need <b>$'+PR_HOST_BANKROLL.toLocaleString()+'</b> chips to host. '+
-        'You\u2019re <b>$'+short.toLocaleString()+'</b> short \u2014 the <b>$9.99 Starter Pack</b> '+
-        '(150,000 chips) covers the full bankroll with extra to play.';
+        'You\u2019re <b>$'+short.toLocaleString()+'</b> short \u2014 the <b>$4.99 pack</b> '+
+        '(150,000 chips) covers the hosting minimum with extra to play.';
     }
   }else{
     btn.disabled=false;
@@ -9072,7 +9071,7 @@ async function prPromptBuyChips(){
   const ok=await showConfirm(
     'Hosting a table needs '+PR_HOST_BANKROLL.toLocaleString()+' chips.\n\n'+
     'You have '+balance.toLocaleString()+' — you\u2019re '+short.toLocaleString()+' short.\n\n'+
-    'The $9.99 Starter Pack gives 150,000 chips, enough to host with extra to spare.\n\n'+
+    'The $4.99 pack gives 150,000 chips, enough to host with extra to spare.\n\n'+
     'Go to the Chip Store?',
     {title:'Not Enough Chips',okLabel:'Chip Store'}
   );
