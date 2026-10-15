@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-15e';
+  window.CLO_BUILD = '2026-10-15f';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -9782,6 +9782,15 @@ function mpInitRound(num){
   });
 }
 
+// What the Bank pill shows (15f, Oct 15 2026): the amount the bank is
+// actually putting up this hand — min(stake, purse) — with the purse as a
+// dim suffix when it is larger. Hosting ALL IN keeps the old single figure.
+function mpHostPillAmount(room){
+  const purse=room.bankroll||0;
+  const cap=(typeof mpBankCap==='function')?mpBankCap(room):purse;
+  if(cap<purse)return cap.toLocaleString()+'<span style="opacity:.55;font-size:.85em;"> / '+purse.toLocaleString()+'</span>';
+  return purse.toLocaleString();
+}
 // Render the top seat strip: host (Bank) on the left, shooters after
 function mpRenderSeats(room){
   const strip=document.getElementById('mp-seat-strip');
@@ -9803,7 +9812,7 @@ function mpRenderSeats(room){
     `<div class="mp-seat-avatar" style="background:${room.hostColor||'#28a020'}">${room.hostAvatar||'👑'}</div>`+
     `<div class="mp-seat-info">`+
       `<div class="mp-seat-name">${(room.hostName||'Host')} <span style="opacity:.6;font-size:.7em;">· Bank</span></div>`+
-      `<div class="mp-seat-bal">💰 ${(room.bankroll||0).toLocaleString()}</div>`+
+      `<div class="mp-seat-bal">💰 ${mpHostPillAmount(room)}</div>`+
     `</div>`;
   strip.appendChild(hostPill);
 
