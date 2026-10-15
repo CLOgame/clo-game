@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-15g';
+  window.CLO_BUILD = '2026-10-15h';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -10176,7 +10176,10 @@ function mpRenderBettingPhase(room,round){
   // tapping a chip, without forcing the full 20s wait when everyone's ready.
   if(_mpIsHost){
     // STOP THE BANK (Piece 2): a valid stop request ends betting right now.
-    if(mpFindStop(room,round)){ mpHostFinalizeBetting(round); return; }
+    // 15h: deferred to a macrotask so the lock write never happens from
+    // inside the room listener (that was the "[mp] room listener RE-ENTERED"
+    // warning on Oct 15). mpHostFinalizeBetting latches per round.
+    if(mpFindStop(room,round)){ setTimeout(()=>mpHostFinalizeBetting(round),0); return; }
     // A stack under the table minimum is not locked yet (14a).
     const allIn=Object.values(bets).every(b=>b&&(b.status==='pass'||mpBetMeetsMin(room,b)));
     if(allIn&&Object.keys(bets).length>0){
@@ -10567,10 +10570,14 @@ function mpIsLiveBet(uid,b,updates){
 }
 
 // Host: lock the betting phase. Auto-pass anyone still pending, then advance.
+let _mpFinalizedRound=null;   // round number already locked by this host (15h)
 function mpHostFinalizeBetting(round){
   if(!_mpIsHost||!_mpRoomRef)return;
-  // Avoid double-firing
+  // Avoid double-firing: once per round, and only out of the betting phase.
+  // Several snapshots can arrive while the lock write is still in flight.
   if(round.phase!=='betting')return;
+  if(_mpFinalizedRound===round.number)return;
+  _mpFinalizedRound=round.number;
   const bets=round.bets||{};
   const room=_mpRoom||{};
   const seats=room.seats||{};
@@ -10600,7 +10607,7 @@ function mpHostFinalizeBetting(round){
     notes.length=0;
     notes.push(nameOf(stopUid)+' STOPPED THE BANK \u2014 $'+cap.toLocaleString()+(others?' \u00b7 '+others+' bet'+(others>1?'s':'')+' cancelled':''));
     updates['lockNotes']=notes.join(' \u00b7 ');
-    _mpRoomRef.child('round').update(updates).catch(err=>console.error('Finalize (stop) failed',err));
+    _mpRoomRef.child('round').update(updates).catch(err=>{ _mpFinalizedRound=null; console.error('Finalize (stop) failed',err); });
     return;
   }
   // 2. SEAT ORDER (14a): walk the seats; each live bet takes what the bank
@@ -10654,6 +10661,7 @@ function mpHostFinalizeBetting(round){
   updates['bankCovered']=(remaining===0);
   updates['lockNotes']=notes.length?notes.join(' \u00b7 '):null;
   _mpRoomRef.child('round').update(updates).catch(err=>{
+    _mpFinalizedRound=null;   // let the timer / next snapshot retry the lock
     console.error('Finalize betting failed',err);
   });
 }
