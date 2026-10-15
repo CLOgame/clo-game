@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-15a';
+  window.CLO_BUILD = '2026-10-15b';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -6830,6 +6830,9 @@ function _refreshChipDisplays(){
   const cs=document.getElementById('cs-balance-val'); if(cs)cs.textContent=v;
   const ld=document.getElementById('landing-chips'); if(ld)ld.textContent=v;
   const fr=document.getElementById('fr-balance'); if(fr)fr.textContent=v;
+  // The multiplayer top-bar pill is its own label too (Oct 14: sat on $0
+  // after an at-table purchase until the next settlement repainted it).
+  const mb=document.getElementById('mp-balance-display'); if(mb)mb.textContent=v;
 }
 function _stripServerOwned(p,keepCreatedAt){
   const out=Object.assign({},p);
@@ -7935,12 +7938,8 @@ function grantChipPurchase(packId){
     _profile.purchasedTotal=(_profile.purchasedTotal||0)+t.chips;
     if(window._saveProfile)window._saveProfile(_profile).catch(()=>{});
   }
-  const csb=document.getElementById('cs-balance-val');
-  if(csb)csb.textContent=balance.toLocaleString();
-  // Refresh chips displayed on landing + lobby
-  const lcEl=document.getElementById('landing-chips');if(lcEl)lcEl.textContent=balance.toLocaleString();
-  const lobEl=document.getElementById('lobby-chips');if(lobEl)lobEl.textContent=balance.toLocaleString();
-  updateTopChips();
+  // Repaint every balance label (chip store, landing, lobby, Free Roll, MP bar).
+  _refreshChipDisplays();
   // If seated at a live MP table, the SEAT is the source of truth for betting
   // and mpSyncLocalBalanceFromRoom copies it back over `balance` on every
   // listener fire. Pushing only from chipShopBack() was too narrow — reaching
