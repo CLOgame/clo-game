@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-14e';
+  window.CLO_BUILD = '2026-10-14f';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -2328,6 +2328,17 @@ html,body{
   font-family:'Bebas Neue',sans-serif;font-size:1rem;
   color:var(--gold,#d4a843);
 }
+
+/* + button beside the table balance: buy chips, keep your seat */
+.mp-buy-btn{
+  width:30px;height:30px;border-radius:50%;margin-left:6px;
+  background:linear-gradient(160deg,#e6c878 0%,#b8882a 60%,#8a6018 100%);
+  color:#1a0d04;border:1px solid #5a3a08;
+  font-family:'Bebas Neue',sans-serif;font-size:1.25rem;line-height:1;
+  cursor:pointer;box-shadow:0 2px 0 #4a2d05,0 3px 8px rgba(0,0,0,.45);
+  flex-shrink:0;
+}
+.mp-buy-btn:active{transform:translateY(1px);}
 
 /* Seat strip — bank + shooters as horizontal pills */
 .mp-seat-strip{
@@ -6033,6 +6044,10 @@ html,body{
     <button class="mp-leave-btn" onclick="mpConfirmLeave()">← Leave</button>
     <div class="mp-room-code">Room: <span id="mp-room-code-display">—</span></div>
     <div class="mp-balance">💰 <span id="mp-balance-display">0</span></div>
+    <!-- Buy chips WITHOUT leaving the table (Oct 14 2026). goToChipShop only
+         swaps screens; the seat and room listener stay live, and the purchase
+         is pushed into the seat (or the host's bankroll) on the way back. -->
+    <button class="mp-buy-btn" onclick="goToChipShop('mp-game')" title="Buy chips — your seat is kept">+</button>
   </div>
 
   <!-- HUD row wrapper. On phone landscape the seat pills and the BANK-vs-YOU
