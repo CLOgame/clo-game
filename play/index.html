@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-15f';
+  window.CLO_BUILD = '2026-10-15g';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -1938,9 +1938,12 @@ html,body{
 
 /* Setup section */
 .pr-setup{
-  background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(0,0,0,.2));
-  border:1.5px solid rgba(212,168,67,.25);
+  /* 15g (Oct 15 2026): darker, near-opaque fill — the old white wash made the
+     text inside the same shade as the card. */
+  background:linear-gradient(180deg,rgba(6,14,26,.78),rgba(3,9,16,.9));
+  border:1.5px solid rgba(212,168,67,.45);
   border-radius:16px;padding:18px;
+  box-shadow:0 10px 30px rgba(0,0,0,.35);
 }
 .pr-label{
   font-family:'Bebas Neue',sans-serif;
@@ -1964,8 +1967,8 @@ html,body{
 .pr-input:focus{outline:none;border-color:var(--gold2);}
 .pr-note{
   font-family:system-ui,sans-serif;
-  font-size:.76rem;line-height:1.5;
-  color:rgba(255,255,255,.55);
+  font-size:.82rem;line-height:1.5;
+  color:#e9e2d0;
   margin-top:8px;
 }
 .pr-bankroll-display{
@@ -1984,13 +1987,13 @@ html,body{
 }
 .pr-stat{
   flex:1;text-align:center;
-  background:rgba(0,0,0,.28);
-  border:1.5px solid rgba(255,255,255,.1);
+  background:rgba(0,0,0,.42);
+  border:1.5px solid rgba(255,255,255,.16);
   border-radius:12px;padding:10px 8px;
 }
 .pr-stat-label{
   font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;
-  color:rgba(255,255,255,.5);margin-bottom:3px;
+  color:rgba(255,255,255,.82);margin-bottom:3px;
 }
 .pr-stat-val{
   font-family:'Bebas Neue',sans-serif;font-size:1.95rem;line-height:1;
@@ -2017,14 +2020,14 @@ html,body{
 /* Bank stake / minimum bet pickers on the host setup screen */
 .pr-pick-row{width:100%;margin-top:10px;}
 .pr-pick-label{
-  font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;
-  color:rgba(255,255,255,.55);margin:0 0 6px 2px;
+  font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--gold2);margin:0 0 6px 2px;
 }
-.pr-pick-hint{letter-spacing:.02em;text-transform:none;color:rgba(255,255,255,.4);margin-left:6px;}
+.pr-pick-hint{letter-spacing:.02em;text-transform:none;color:rgba(255,255,255,.72);margin-left:6px;}
 .pr-pick-chips{display:flex;flex-wrap:wrap;gap:6px;}
 .pr-pick-chip{
-  background:rgba(0,0,0,.32);color:rgba(255,255,255,.8);
-  border:1.5px solid rgba(255,255,255,.14);border-radius:999px;
+  background:rgba(0,0,0,.5);color:#fff;
+  border:1.5px solid rgba(255,255,255,.32);border-radius:999px;
   padding:7px 13px;cursor:pointer;
   font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:.07em;
 }
@@ -2038,8 +2041,8 @@ html,body{
 .pr-visibility-row{
   width:100%;
   margin-top:12px;
-  background:rgba(0,0,0,.3);
-  border:1px solid rgba(212,168,67,.18);
+  background:rgba(0,0,0,.42);
+  border:1px solid rgba(212,168,67,.3);
   border-radius:12px;
   padding:11px 14px;
 }
@@ -2082,7 +2085,7 @@ html,body{
 }
 .pr-toggle-desc{
   font-size:.7rem;
-  color:rgba(207,232,255,.6);
+  color:rgba(220,236,255,.85);
 }
 
 /* Open Tables list (lobby) */
