@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-15c';
+  window.CLO_BUILD = '2026-10-15d';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -6866,7 +6866,15 @@ function _awaitClaim(){
 }
 function claimReferralCredit(force){
   if(!_uid||!_db||!_profile||_isOffline)return Promise.resolve();
-  if(_referralClaimBusy)return _referralClaimPromise||Promise.resolve();
+  if(_referralClaimBusy){
+    // A FORCED claim (a purchase just landed) must not piggyback on a claim
+    // that is already running — that one read the ledger BEFORE the credit
+    // and finds nothing, so the chips only showed up on the next launch
+    // (Oct 14 2026: buying right after boot, while the boot claim was still
+    // in flight). Wait for it, then run a fresh one.
+    if(force&&_referralClaimPromise)return _referralClaimPromise.catch(()=>{}).then(()=>claimReferralCredit(true));
+    return _referralClaimPromise||Promise.resolve();
+  }
   const now=Date.now();
   if(!force&&now-_referralClaimAt<60000)return Promise.resolve();   // at most once a minute
   _referralClaimBusy=true;_referralClaimAt=now;
@@ -8150,7 +8158,12 @@ async function _storeFinish(service,productId,purchaseToken,paymentResponse){
 // Free Roll skips are claimed on the Free Roll screen; Remove Ads is mirrored.
 async function _storeApplyGrant(result){
   if(!result||!result.ok)return;
-  if(result.grant==='chips'){ await claimReferralCredit(true); }
+  if(result.grant==='chips'){
+    await claimReferralCredit(true);
+    // Backstop: one more forced claim shortly after, in case the first lost a
+    // race with a profile save. Idempotent — an empty ledger writes nothing.
+    setTimeout(()=>{ try{ claimReferralCredit(true); }catch(_){} },2500);
+  }
   else if(result.grant==='ads'){
     if(_profile&&!_profile.adsRemoved){ _profile.adsRemoved=true; saveLocalProfile(_profile); applyAdState(); }
   }
