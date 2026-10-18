@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-15i';
+  window.CLO_BUILD = '2026-10-18a';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -2581,6 +2581,23 @@ html,body{
   transition:transform .08s,box-shadow .08s;
 }
 .mp-chip-btn:active{transform:translateY(2px);box-shadow:0 1px 0 #062043,0 2px 6px rgba(0,0,0,.45);}
+.mp-update-banner{
+  position:fixed;left:50%;top:10px;transform:translateX(-50%);
+  z-index:9000;max-width:min(94vw,560px);
+  display:flex;align-items:center;gap:10px;
+  background:linear-gradient(180deg,#3a2a06,#241903);
+  border:1.5px solid #e6c878;border-radius:12px;
+  padding:8px 10px 8px 14px;
+  color:#ffe7a8;font-family:system-ui,sans-serif;font-size:.82rem;line-height:1.3;
+  box-shadow:0 8px 24px rgba(0,0,0,.6);
+}
+.mp-update-banner .mp-update-msg{flex:1;}
+.mp-update-btn{
+  background:linear-gradient(160deg,#e6c878,#b8882a 60%,#8a6018);
+  color:#1a0d04;border:1px solid #5a3a08;border-radius:999px;
+  padding:6px 12px;font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:.07em;cursor:pointer;
+}
+.mp-update-x{background:none;border:0;color:#ffe7a8;opacity:.7;font-size:1rem;cursor:pointer;padding:4px 6px;}
 .mp-chip-btn.bchip-lock{
   background:linear-gradient(160deg,#7ce850 0%,#28a020 60%,#106410 100%);
   border-color:#d4f5c0;color:#fff;
@@ -9203,6 +9220,7 @@ function prCreateRoom(){
     // minimum. Both plain numbers (RTDB rejects undefined).
     stake:Number(prEffectiveStake()||balance||PR_HOST_BANKROLL),
     minBet:Number(_prMinBetChoice||0),
+    build:String(window.CLO_BUILD||''),   // 18a: lets joiners spot a stale app
     public:!!isPublic,
     status:'waiting',
     createdAt:Date.now(),
@@ -9648,6 +9666,7 @@ function mpEnterTable(roomRef,isHost){
       return;
     }
     _mpRoom=room;
+    mpCheckBuildMismatch(room);
     mpRenderSeats(room);
     // Keep local balance in sync with seat balance (handles wins/losses written by host)
     mpSyncLocalBalanceFromRoom(room);
@@ -9797,6 +9816,49 @@ function mpInitRound(num){
     console.error('mpInitRound failed',err);
     showToast('Could not start round');
   });
+}
+
+// ── Build mismatch banner (18a, Oct 18 2026) ─────────────────────────────────
+// Every device at a table should run the same build. The TWA is a thin shell
+// over a cached page, so a phone can sit on an old build for days after a
+// deploy (Oct 18: host on 15i walked the turns, two phones on 15h bet freely).
+// The host stamps room.build at creation; anyone whose own stamp is older
+// gets a persistent banner with a Restart button; a host older than a joiner
+// gets told the table is behind. Build stamps sort as plain strings
+// (YYYY-MM-DDx). Shown once per room.
+let _mpBuildWarnedRoom=null;
+function mpCheckBuildMismatch(room){
+  if(!room||!room.build||!room.code)return;
+  if(_mpBuildWarnedRoom===room.code)return;
+  const mine=String(window.CLO_BUILD||'');
+  if(!mine||mine===room.build)return;
+  _mpBuildWarnedRoom=room.code;
+  if(mine<room.build){
+    mpShowUpdateBanner('A newer version is live \u2014 restart to update ('+mine+' \u2192 '+room.build+')',true);
+  }else{
+    // I'm newer than the host. Nothing I can do about their copy; say so.
+    mpShowUpdateBanner('The host is on an older version ('+room.build+'). Ask them to restart the app.',false);
+  }
+}
+function mpShowUpdateBanner(msg,canRestart){
+  let b=document.getElementById('mp-update-banner');
+  if(!b){
+    b=document.createElement('div');
+    b.id='mp-update-banner';
+    b.className='mp-update-banner';
+    document.body.appendChild(b);
+  }
+  b.innerHTML='<span class="mp-update-msg"></span>'+
+    (canRestart?'<button class="mp-update-btn" onclick="mpRestartApp()">Restart</button>':'')+
+    '<button class="mp-update-x" onclick="document.getElementById(\'mp-update-banner\').remove()">\u2715</button>';
+  b.querySelector('.mp-update-msg').textContent=msg;
+}
+// Reload bypassing the page's own cached copy. The service worker is
+// network-first with no-store for the app shell, so a plain reload fetches
+// the live file; clearing SW caches first covers an older worker.
+async function mpRestartApp(){
+  try{ if(window.caches){ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.delete(k))); } }catch(_){}
+  location.reload();
 }
 
 // ── Turn order helpers (15i) ────────────────────────────────────────────────
@@ -10687,7 +10749,9 @@ function mpStartBetTimer(room,round){
       clearInterval(_mpBetTimerId);_mpBetTimerId=null;
       // Host times the current shooter out (rides or passes); the resulting
       // snapshot moves the turn on.
-      if(_mpIsHost){mpHostTurnTimeout(round);}
+      // Deferred: the first tick runs synchronously inside the render, which
+      // runs inside the room listener — a write here re-enters it (Oct 18).
+      if(_mpIsHost){setTimeout(()=>mpHostTurnTimeout(round),0);}
     }
   };
   tick();
