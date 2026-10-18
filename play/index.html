@@ -38,7 +38,8 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-18c';
+  window.CLO_BUILD = '2026-10-18d';
+  document.addEventListener('DOMContentLoaded',()=>{ const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD; });
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -943,6 +944,11 @@ html,body{
 /* ══════════════════════════════════════════════════════════════════════ */
 /*  LOBBY — Landscape Carousel                                            */
 /* ══════════════════════════════════════════════════════════════════════ */
+.build-tag{
+  position:absolute;left:8px;bottom:4px;z-index:5;pointer-events:none;
+  font-family:system-ui,sans-serif;font-size:.6rem;letter-spacing:.06em;
+  color:rgba(255,255,255,.35);
+}
 #screen-lobby{
   background:radial-gradient(ellipse at 50% 30%,#1a6aaa 0%,#0d4a80 40%,#072d55 100%);
   flex-direction:column;justify-content:flex-start;
@@ -5758,6 +5764,7 @@ html,body{
 
 <!-- ══════════════════════════════════════ LOBBY ══ -->
 <div class="screen" id="screen-lobby">
+  <div class="build-tag" id="build-tag"></div>
 
   <!-- ── Top Bar ── -->
   <div class="lobby-top">
@@ -6891,6 +6898,9 @@ function _awaitClaim(){
   return Promise.race([_referralClaimPromise.catch(()=>{}),new Promise(r=>setTimeout(r,8000))]);
 }
 function claimReferralCredit(force){
+  // 18d: a stale offline flag must not swallow a forced claim when we plainly
+  // have a signed-in session and a network.
+  if(force&&_isOffline&&_auth&&_auth.currentUser&&navigator.onLine!==false)_isOffline=false;
   if(!_uid||!_db||!_profile||_isOffline)return Promise.resolve();
   if(_referralClaimBusy){
     // A FORCED claim (a purchase just landed) must not piggyback on a claim
@@ -7039,7 +7049,12 @@ setTimeout(()=>{
   const splash = document.getElementById('screen-splash');
   // If auth never resolved (e.g. signInAnonymously hung with no network) and we
   // have no profile yet, fall into offline mode so SP/Free Roll still work.
-  if(!_profile){ enterOfflineMode(); }
+  // 18d (Oct 18 2026): a BRAND-NEW player has no profile at 4s either — they
+  // are still on the landing/create screen — and this used to flag the whole
+  // first session offline (claimReferralCredit then refused every forced
+  // claim, so bought chips only showed up on the next launch). A signed-in
+  // user means Firebase is reachable: only go offline when auth never came.
+  if(!_profile && !(_auth && _auth.currentUser)){ enterOfflineMode(); }
   if(splash && (splash.classList.contains('active') || splash.style.display !== 'none')){
     console.warn('Splash fallback fired');
     goToLanding();
@@ -8188,6 +8203,8 @@ async function _storeFinish(service,productId,purchaseToken,paymentResponse){
 // Free Roll skips are claimed on the Free Roll screen; Remove Ads is mirrored.
 async function _storeApplyGrant(result){
   if(!result||!result.ok)return;
+  _isOffline=false;   // 18d: the server just verified this purchase — we are online
+  if(_auth&&_auth.currentUser)_uid=_auth.currentUser.uid;
   if(result.grant==='chips'){
     await claimReferralCredit(true);
     // Backstop: one more forced claim shortly after, in case the first lost a
