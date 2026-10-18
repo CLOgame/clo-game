@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-15h';
+  window.CLO_BUILD = '2026-10-18a';
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -2581,6 +2581,29 @@ html,body{
   transition:transform .08s,box-shadow .08s;
 }
 .mp-chip-btn:active{transform:translateY(2px);box-shadow:0 1px 0 #062043,0 2px 6px rgba(0,0,0,.45);}
+.mp-update-banner{
+  position:fixed;left:50%;top:10px;transform:translateX(-50%);
+  z-index:9000;max-width:min(94vw,560px);
+  display:flex;align-items:center;gap:10px;
+  background:linear-gradient(180deg,#3a2a06,#241903);
+  border:1.5px solid #e6c878;border-radius:12px;
+  padding:8px 10px 8px 14px;
+  color:#ffe7a8;font-family:system-ui,sans-serif;font-size:.82rem;line-height:1.3;
+  box-shadow:0 8px 24px rgba(0,0,0,.6);
+}
+.mp-update-banner .mp-update-msg{flex:1;}
+.mp-update-btn{
+  background:linear-gradient(160deg,#e6c878,#b8882a 60%,#8a6018);
+  color:#1a0d04;border:1px solid #5a3a08;border-radius:999px;
+  padding:6px 12px;font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:.07em;cursor:pointer;
+}
+.mp-update-x{background:none;border:0;color:#ffe7a8;opacity:.7;font-size:1rem;cursor:pointer;padding:4px 6px;}
+.mp-chip-btn.bchip-lock{
+  background:linear-gradient(160deg,#7ce850 0%,#28a020 60%,#106410 100%);
+  border-color:#d4f5c0;color:#fff;
+  box-shadow:0 3px 0 #0a3a0a,0 5px 12px rgba(0,0,0,.45),0 0 14px rgba(124,232,80,.45);
+}
+.mp-bet-countdown.mine{color:#7ce850;border-color:rgba(124,232,80,.7);text-shadow:0 0 8px rgba(124,232,80,.5);}
 .mp-chip-btn.disabled,.mp-chip-btn:disabled{
   opacity:.4;cursor:not-allowed;
   background:linear-gradient(160deg,#444 0%,#222 100%);
@@ -9197,6 +9220,7 @@ function prCreateRoom(){
     // minimum. Both plain numbers (RTDB rejects undefined).
     stake:Number(prEffectiveStake()||balance||PR_HOST_BANKROLL),
     minBet:Number(_prMinBetChoice||0),
+    build:String(window.CLO_BUILD||''),   // 18a: lets joiners spot a stale app
     public:!!isPublic,
     status:'waiting',
     createdAt:Date.now(),
@@ -9642,6 +9666,7 @@ function mpEnterTable(roomRef,isHost){
       return;
     }
     _mpRoom=room;
+    mpCheckBuildMismatch(room);
     mpRenderSeats(room);
     // Keep local balance in sync with seat balance (handles wins/losses written by host)
     mpSyncLocalBalanceFromRoom(room);
@@ -9710,12 +9735,16 @@ const PR_STAKE_PRESETS=[100000,250000,500000,1000000];   // + ALL IN
 const PR_MIN_BET_PRESETS=[0,1000,5000,25000,100000];     // 0 = no minimum
 let _prStakeChoice='all';   // 'all' or a number from PR_STAKE_PRESETS
 let _prMinBetChoice=0;
-// How long the host waits after the LAST bet change before rolling. Chips
-// now STACK, so this clock restarts on every tap — 3s was too tight to add
-// a second chip, and in a heads-up game (one non-bank bettor) it fired the
-// instant you tapped, which read as "my bet is locked".
-const MP_EARLY_CLOSE_MS=6000;
-const MP_BET_TIMER_MS=20000;     // 20s to bet or pass
+// TURN-BASED BETTING (15i, Oct 15 2026). Betting goes around the table in
+// seat order — one shooter at a time, each with their own clock. The host
+// writes round.turnUid / round.turnDeadline and advances on every snapshot.
+// A turn ends when the shooter taps BET (done:true on their bet entry),
+// PASS, or the clock runs out (a stack at/over the minimum RIDES, anything
+// else is passed). PASS is allowed out of turn; STOP THE BANK is a trump and
+// is live for everyone the whole phase. The shared 20s clock and the 6s
+// "early close" quiet-window are retired — the lock fires the moment the
+// last seat has acted.
+const MP_TURN_MS=12000;          // per-shooter clock to bet or pass
 const MP_SHOOTER_TIMER_MS=20000; // 20s per shooter to roll
 
 // Host only: create a fresh round object on Firebase
@@ -9773,15 +9802,163 @@ function mpInitRound(num){
     bankHand:null,
     bankResultType:null,
     bets:bets,
-    bettingDeadline: Object.keys(bets).length>0 ? Date.now()+MP_BET_TIMER_MS : null,
+    turnUid:null,            // set just below (15i)
+    turnDeadline:null,
     shooterQueue:null,
     currentShooterIdx:0,
     shooterDeadline:null,
     startedAt:Date.now()
   };
+  // First turn: the earliest seat still pending (broke/absent were passed above).
+  const first=mpNextTurnUid(_mpRoom,round);
+  if(first){ round.turnUid=first; round.turnDeadline=Date.now()+MP_TURN_MS; }
   _mpRoomRef.child('round').set(round).catch(err=>{
     console.error('mpInitRound failed',err);
     showToast('Could not start round');
+  });
+}
+
+// ── Build mismatch banner (18a, Oct 18 2026) ─────────────────────────────────
+// Every device at a table should run the same build. The TWA is a thin shell
+// over a cached page, so a phone can sit on an old build for days after a
+// deploy (Oct 18: host on 15i walked the turns, two phones on 15h bet freely).
+// The host stamps room.build at creation; anyone whose own stamp is older
+// gets a persistent banner with a Restart button; a host older than a joiner
+// gets told the table is behind. Build stamps sort as plain strings
+// (YYYY-MM-DDx). Shown once per room.
+let _mpBuildWarnedRoom=null;
+function mpCheckBuildMismatch(room){
+  if(!room||!room.build||!room.code)return;
+  if(_mpBuildWarnedRoom===room.code)return;
+  const mine=String(window.CLO_BUILD||'');
+  if(!mine||mine===room.build)return;
+  _mpBuildWarnedRoom=room.code;
+  if(mine<room.build){
+    mpShowUpdateBanner('A newer version is live \u2014 restart to update ('+mine+' \u2192 '+room.build+')',true);
+  }else{
+    // I'm newer than the host. Nothing I can do about their copy; say so.
+    mpShowUpdateBanner('The host is on an older version ('+room.build+'). Ask them to restart the app.',false);
+  }
+}
+function mpShowUpdateBanner(msg,canRestart){
+  let b=document.getElementById('mp-update-banner');
+  if(!b){
+    b=document.createElement('div');
+    b.id='mp-update-banner';
+    b.className='mp-update-banner';
+    document.body.appendChild(b);
+  }
+  b.innerHTML='<span class="mp-update-msg"></span>'+
+    (canRestart?'<button class="mp-update-btn" onclick="mpRestartApp()">Restart</button>':'')+
+    '<button class="mp-update-x" onclick="document.getElementById(\'mp-update-banner\').remove()">\u2715</button>';
+  b.querySelector('.mp-update-msg').textContent=msg;
+}
+// Reload bypassing the page's own cached copy. The service worker is
+// network-first with no-store for the app shell, so a plain reload fetches
+// the live file; clearing SW caches first covers an older worker.
+async function mpRestartApp(){
+  try{ if(window.caches){ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.delete(k))); } }catch(_){}
+  location.reload();
+}
+
+// ── Turn order helpers (15i) ────────────────────────────────────────────────
+// A bet entry is DONE for the turn when it is a pass, or a bet the shooter
+// locked with BET (done:true). A live bet with no done flag is a stack still
+// being built on the current turn.
+function mpBetTurnDone(b){
+  return !!(b&&(b.status==='pass'||(b.status==='bet'&&b.done)));
+}
+// Earliest seat (host excluded, seat order) whose bet is not done. Skips
+// nothing else — the host's advance handles broke/absent seats by passing
+// them, so the harness and the live path agree on who is next.
+function mpNextTurnUid(room,round){
+  const seats=(room&&room.seats)||{};
+  const bets=(round&&round.bets)||{};
+  for(let i=0;i<PR_MAX_SEATS;i++){
+    const sObj=seats[i];
+    if(!sObj||!sObj.uid||sObj.uid===room.hostUid)continue;
+    const b=bets[sObj.uid];
+    if(!b)continue;                 // no entry = not part of this round
+    if(mpBetTurnDone(b))continue;
+    return sObj.uid;
+  }
+  return null;
+}
+function mpIsMyTurn(){
+  const r=_mpRoom&&_mpRoom.round;
+  return !!(r&&r.phase==='betting'&&r.turnUid&&r.turnUid===_mpMyUid);
+}
+// Host: make sure the turn pointer is on the right seat. Seats that cannot
+// act (explicit zero balance, or absent) are passed as the pointer reaches
+// them. Writes only when something changes; latched per round+uid so the
+// snapshots that arrive while the write is in flight do not repeat it.
+let _mpTurnWriteKey=null;
+function mpHostAdvanceTurn(room,round){
+  if(!_mpIsHost||!_mpRoomRef||!round||round.phase!=='betting')return false;
+  const seats=room.seats||{};
+  const bets=round.bets||{};
+  const updates={};
+  let next=null;
+  for(let i=0;i<PR_MAX_SEATS;i++){
+    const sObj=seats[i];
+    if(!sObj||!sObj.uid||sObj.uid===room.hostUid)continue;
+    const b=bets[sObj.uid];
+    if(!b||mpBetTurnDone(b))continue;
+    const broke=(typeof sObj.balance==='number'&&sObj.balance<=0);
+    const absent=(sObj.status==='absent');
+    // Nothing left in the bank for this seat (earlier seats covered it) —
+    // no point giving them a clock to bet into $0.
+    const covered=mpBankOpen({...room,round},sObj.uid)<=0;
+    if((broke||absent||covered)&&!(b.status==='bet'&&b.amount>0)){
+      updates['bets/'+sObj.uid+'/status']='pass';
+      updates['bets/'+sObj.uid+'/amount']=0;
+      continue;
+    }
+    next=sObj.uid; break;
+  }
+  if(next===null){
+    // Nobody left to act → lock. (Passes above ride along in the finalize
+    // write via the normal pending→pass rule, so skip them here.)
+    setTimeout(()=>mpHostFinalizeBetting(round),0);
+    return true;
+  }
+  const key=round.number+':'+next;
+  if(round.turnUid===next&&round.turnDeadline){
+    return false;                  // pointer already right, nothing to write
+  }
+  if(_mpTurnWriteKey===key)return false;   // write already in flight
+  _mpTurnWriteKey=key;
+  updates['turnUid']=next;
+  updates['turnDeadline']=Date.now()+MP_TURN_MS;
+  setTimeout(()=>{
+    _mpRoomRef.child('round').update(updates).catch(err=>{
+      _mpTurnWriteKey=null;
+      console.error('[mp] turn advance failed',err);
+    });
+  },0);
+  return true;
+}
+// Host: the current shooter's clock ran out. Money that is down RIDES (same
+// rule as the old shared clock); an empty or under-minimum stack is passed.
+let _mpTurnTimeoutKey=null;
+function mpHostTurnTimeout(round){
+  if(!_mpIsHost||!_mpRoomRef||!round||round.phase!=='betting'||!round.turnUid)return;
+  const key=round.number+':'+round.turnUid+':'+round.turnDeadline;
+  if(_mpTurnTimeoutKey===key)return;
+  _mpTurnTimeoutKey=key;
+  const uid=round.turnUid;
+  const b=(round.bets||{})[uid];
+  if(mpBetTurnDone(b))return;      // they acted at the buzzer — snapshot will advance
+  const upd={};
+  if(b&&b.status==='bet'&&b.amount>0&&mpBetMeetsMin(_mpRoom,b)){
+    upd['bets/'+uid+'/done']=true;
+  }else{
+    upd['bets/'+uid+'/status']='pass';
+    upd['bets/'+uid+'/amount']=0;
+  }
+  _mpRoomRef.child('round').update(upd).catch(err=>{
+    _mpTurnTimeoutKey=null;
+    console.error('[mp] turn timeout write failed',err);
   });
 }
 
@@ -9806,6 +9983,8 @@ function mpRenderSeats(room){
   if(rd&&rd.phase==='player-rolls'){
     const q=rd.shooterQueue||[];
     activeUid=q[rd.currentShooterIdx||0]||null;
+  }else if(rd&&rd.phase==='betting'&&rd.turnUid){
+    activeUid=rd.turnUid;   // 15i: whose turn to bet
   }
 
   // Host (Bank)
@@ -10085,10 +10264,16 @@ function mpHostWatchdogTick(){
         mpHostForceRollFor(uid);
       }
     }
-  }else if(r.phase==='betting'&&r.bettingDeadline&&now>r.bettingDeadline+3000){
-    _mpWatchLastAct=now;
-    console.warn('[mp watchdog] betting deadline blown — closing betting');
-    mpHostFinalizeBetting(r);   // takes the round object
+  }else if(r.phase==='betting'){
+    if(r.turnUid&&r.turnDeadline&&now>r.turnDeadline+3000){
+      _mpWatchLastAct=now;
+      console.warn('[mp watchdog] turn clock blown — timing out',r.turnUid);
+      mpHostTurnTimeout(r);
+    }else if(!r.turnUid){
+      // No pointer at all (e.g. a stale write) — re-derive it.
+      _mpWatchLastAct=now;
+      mpHostAdvanceTurn(_mpRoom,r);
+    }
   }
 }
 function mpStartHostWatchdog(){
@@ -10117,37 +10302,41 @@ function mpRenderBettingPhase(room,round){
   const isBank=(room.hostUid===myUid);
   const myBet=bets[myUid];
 
+  // Whose turn is it (15i)? The host keeps round.turnUid pointed at the
+  // earliest seat that has not acted; everyone renders off it.
+  const turnUid=round.turnUid||null;
+  const turnSeat=turnUid?mpFindSeatByUid(room,turnUid):null;
+  const turnName=(turnSeat&&turnSeat.username)||'Player';
+  const myTurn=(turnUid===myUid);
+  const mn=mpMinBet(room);
+
   // Top message
   if(isBank){
-    // Build a friendly wait message from the actual pending player names so
-    // the bank sees who they're waiting on rather than a sterile "1 of 1".
-    const pendingNames=[];
-    const seats=room.seats||{};
-    for(let i=0;i<PR_MAX_SEATS;i++){
-      const s=seats[i];
-      if(!s||!s.uid||s.uid===room.hostUid)continue;
-      const b=bets[s.uid];
-      if(b&&b.status==='pending')pendingNames.push(s.username||'Player');
-    }
-    if(pendingNames.length===0){
-      mpSetMsg('All bets in — ready to roll');
-    }else if(pendingNames.length===1){
-      mpSetMsg(`Waiting for ${pendingNames[0]} to bet…`);
-    }else if(pendingNames.length===2){
-      mpSetMsg(`Waiting for ${pendingNames[0]} and ${pendingNames[1]} to bet…`);
-    }else{
-      mpSetMsg(`Waiting on ${pendingNames.length} players to bet…`);
-    }
-  }else if(myBet&&myBet.status==='bet'){
-    const mn=mpMinBet(room);
-    mpSetMsg((mn>0&&myBet.amount<mn)
-      ? 'You bet $'+myBet.amount.toLocaleString()+' \u2014 table minimum is $'+mn.toLocaleString()
-      : 'You bet $'+myBet.amount.toLocaleString());
+    if(!turnUid)mpSetMsg('All bets in — ready to roll');
+    else mpSetMsg(`${turnName}'s turn to bet…`);
   }else if(myBet&&myBet.status==='pass'){
     mpSetMsg('You passed this round');
+  }else if(myBet&&myBet.status==='bet'&&myBet.done){
+    mpSetMsg('You\u2019re in for $'+myBet.amount.toLocaleString());
+  }else if(myTurn){
+    if(myBet&&myBet.status==='bet'&&myBet.amount>0){
+      mpSetMsg((mn>0&&myBet.amount<mn)
+        ? '$'+myBet.amount.toLocaleString()+' down \u2014 table minimum is $'+mn.toLocaleString()
+        : '$'+myBet.amount.toLocaleString()+' down \u2014 tap BET to lock it');
+    }else{
+      mpSetMsg('Your turn \u2014 place your bet or pass');
+    }
+  }else if(turnUid){
+    const pos=mpShooterPos(room,myUid);
+    const tpos=mpShooterPos(room,turnUid);
+    mpSetMsg(`${turnName} is betting\u2026`+(pos&&tpos&&pos===tpos+1?' you\u2019re next':''));
   }else{
-    mpSetMsg('Place your bet or pass');
+    mpSetMsg('Bets are in');
   }
+  // Turn pill (same one the shooter phase uses): who the table is waiting on.
+  if(turnUid&&!isBank)mpSetTurnPill(myTurn?'YOUR BET':turnName.toUpperCase()+' IS BETTING',myTurn);
+  else if(turnUid&&isBank)mpSetTurnPill(turnName.toUpperCase()+' IS BETTING',false);
+  else mpSetTurnPill(null);
 
   // Log strip: per-player status
   mpSetLog(mpBuildBetStatusLog(room,round));
@@ -10166,60 +10355,23 @@ function mpRenderBettingPhase(room,round){
     mpHideBetPanel();
   }
 
-  // Start the visible countdown + auto-advance watchdog
+  // Start the visible per-turn countdown (host also times the turn out)
   mpStartBetTimer(room,round);
 
-  // Host watchdog: when ALL bets are locked in, kick off a brief 3-second
-  // "last chance to change" countdown before advancing. Each round is
-  // independent — players can raise, lower, or switch to pass right up
-  // until the bank rolls. This gives a beat to flip your mind even after
-  // tapping a chip, without forcing the full 20s wait when everyone's ready.
   if(_mpIsHost){
     // STOP THE BANK (Piece 2): a valid stop request ends betting right now.
-    // 15h: deferred to a macrotask so the lock write never happens from
-    // inside the room listener (that was the "[mp] room listener RE-ENTERED"
-    // warning on Oct 15). mpHostFinalizeBetting latches per round.
+    // Deferred to a macrotask so the lock write never happens from inside
+    // the room listener (15h). mpHostFinalizeBetting latches per round.
     if(mpFindStop(room,round)){ setTimeout(()=>mpHostFinalizeBetting(round),0); return; }
-    // A stack under the table minimum is not locked yet (14a).
-    const allIn=Object.values(bets).every(b=>b&&(b.status==='pass'||mpBetMeetsMin(room,b)));
-    if(allIn&&Object.keys(bets).length>0){
-      const sig=Object.keys(bets).sort().map(u=>u+':'+bets[u].status+':'+(bets[u].amount||0)).join('|');
-      mpHostScheduleEarlyClose(round,sig);
-    }else{
-      mpHostCancelEarlyClose();
-    }
+    // Keep the turn pointer on the earliest seat that has not acted; lock
+    // when nobody is left (15i). Writes are deferred + latched inside.
+    mpHostAdvanceTurn(room,round);
   }
 }
 
-// Schedule a 3-second "last call" window. Cancels if any player un-locks
-// (which can't happen with the current UI, but defensive). The host writes
-// phase='pre-roll' after the window — same as the normal timer expiry.
-let _mpEarlyCloseTimer=null;
-let _mpEarlyCloseSig=null;
 let _mpLockNoteKey=null;   // round number whose lock notes were already toasted
 let _mpStopCalloutKey=null;   // round number whose BANK STOPPED flash already ran
 let _mpBustCalloutKey=null;   // round number whose BANK BUSTED flash already ran
-// sig = a fingerprint of everyone's current bet. While it keeps changing the
-// player is still adjusting, so the countdown restarts instead of running out
-// underneath them. Only once the table goes quiet for MP_EARLY_CLOSE_MS does
-// the host roll.
-function mpHostScheduleEarlyClose(round,sig){
-  if(_mpEarlyCloseTimer&&sig===_mpEarlyCloseSig)return;  // nothing changed
-  if(_mpEarlyCloseTimer)clearTimeout(_mpEarlyCloseTimer);
-  _mpEarlyCloseSig=sig;
-  _mpEarlyCloseTimer=setTimeout(()=>{
-    _mpEarlyCloseTimer=null;_mpEarlyCloseSig=null;
-    // Re-check phase before advancing — host might have advanced via timer already
-    if(_mpRoom&&_mpRoom.round&&_mpRoom.round.phase==='betting'){
-      mpHostFinalizeBetting(_mpRoom.round);
-    }
-  },MP_EARLY_CLOSE_MS);
-}
-function mpHostCancelEarlyClose(){
-  if(_mpEarlyCloseTimer){clearTimeout(_mpEarlyCloseTimer);_mpEarlyCloseTimer=null;}
-  _mpEarlyCloseSig=null;
-}
-
 function mpBuildBetStatusLog(room,round){
   const bets=round.bets||{};
   const seats=room.seats||{};
@@ -10230,10 +10382,11 @@ function mpBuildBetStatusLog(room,round){
     const s=seats[i];
     if(!s||!s.uid||s.uid===room.hostUid)continue;
     const b=bets[s.uid];
-    const name=(NUM[n++]||'')+' '+(s.username||'P');
-    if(!b||b.status==='pending')parts.push(`${name} ⏳`);
+    const turn=(round.turnUid===s.uid)?'\u25b6 ':'';
+    const name=turn+(NUM[n++]||'')+' '+(s.username||'P');
+    if(!b||b.status==='pending')parts.push(`${name}${turn?' betting':' \u23f3'}`);
     else if(b.status==='pass')parts.push(`${name} pass`);
-    else if(b.status==='bet')parts.push(`${name} $${b.amount.toLocaleString()}`+(b.stop?' STOP':'')+(mpBetMeetsMin(room,b)?' ✓':' ⚠'));
+    else if(b.status==='bet')parts.push(`${name} $${b.amount.toLocaleString()}`+(b.stop?' STOP':'')+(b.done?' \u2713':(mpBetMeetsMin(room,b)?'':' \u26a0')));
   }
   const open=mpBankOpen(room,null);
   const head='🏦 $'+open.toLocaleString()+' open';
@@ -10257,12 +10410,22 @@ function mpShowBetPanel(room,round){
   }
   const myBalance=mpGetMyBalance(room);
   panel.innerHTML='';
+  // Turn state (15i): chips and clear only on my turn; PASS any time I have
+  // not acted; STOP any time (trump). Once I'm done the panel is read-only
+  // except STOP.
+  const myBet=(round.bets||{})[_mpMyUid];
+  const myTurn=(round.turnUid&&round.turnUid===_mpMyUid);
+  const iAmDone=mpBetTurnDone(myBet);
+  const canAct=myTurn&&!iAmDone;
+  const turnSeat=round.turnUid?mpFindSeatByUid(room,round.turnUid):null;
+  const turnName=((turnSeat&&turnSeat.username)||'Player').toUpperCase();
+  panel.classList.toggle('my-turn',!!canAct);
 
-  // Countdown pill
+  // Countdown pill (the current shooter's clock — everyone sees it)
   const cd=document.createElement('div');
-  cd.className='mp-bet-countdown';
+  cd.className='mp-bet-countdown'+(canAct?' mine':'');
   cd.id='mp-bet-countdown';
-  cd.textContent='20s';
+  cd.textContent='';
   panel.appendChild(cd);
 
   // BANK OPEN line (14a): how much of the bank is still uncovered by OTHER
@@ -10277,9 +10440,14 @@ function mpShowBetPanel(room,round){
   if(underMin)info.classList.add('under');
   if(openExcl-myCur<=0&&myCur>0)info.classList.add('covered');
   const pos=mpShooterPos(room,_mpMyUid);
-  info.innerHTML='BANK: <b>$'+Math.max(0,openExcl-myCur).toLocaleString()+'</b> OPEN'+
+  let lead;
+  if(myBet&&myBet.status==='pass')lead='YOU PASSED';
+  else if(iAmDone)lead='YOU\u2019RE IN FOR <b>$'+myCur.toLocaleString()+'</b>';
+  else if(canAct)lead='<b>YOUR TURN</b>';
+  else if(round.turnUid)lead='WAITING ON <b>'+turnName+'</b>'+(pos?' · YOU\u2019RE '+mpOrdinal(pos).toUpperCase():'');
+  else lead='BETS LOCKING';
+  info.innerHTML=lead+' · BANK: <b>$'+Math.max(0,openExcl-myCur).toLocaleString()+'</b> OPEN'+
     (minBet>0?' · MIN <b>$'+minBet.toLocaleString()+'</b>':'')+
-    (pos?' · YOU\u2019RE '+mpOrdinal(pos).toUpperCase():'')+
     (underMin?' · <span class="warn">UNDER MINIMUM</span>':'');
   panel.appendChild(info);
 
@@ -10299,9 +10467,9 @@ function mpShowBetPanel(room,round){
   MP_CHIP_PRESETS.forEach((amt,i)=>{
     const btn=document.createElement('button');
     btn.className='mp-chip-btn bchip bc'+((i%5)+1);
-    // A chip is tappable while there is still room to add ANYTHING (mpAddBet
-    // caps the tap at the ceiling rather than refusing it).
-    const canAfford=myBalance>=amt&&myMax>myCur;
+    // A chip is tappable on MY TURN while there is still room to add
+    // anything (mpAddBet caps the tap at the ceiling rather than refusing it).
+    const canAfford=canAct&&myBalance>=amt&&myMax>myCur;
     if(!canAfford)btn.classList.add('disabled');
     btn.disabled=!canAfford;
     btn.textContent='$'+(amt>=1000?(amt/1000)+'K':amt);
@@ -10314,7 +10482,7 @@ function mpShowBetPanel(room,round){
   // All-In chip (gold). When the bank has less open than my stack, this bets
   // what the bank can take and is labelled COVER rather than ALL IN — calling
   // it all-in while it wagers a fraction of the stack reads as a bug.
-  if(myBalance>0&&myMax>0){
+  if(canAct&&myBalance>0&&myMax>0){
     const allInBtn=document.createElement('button');
     allInBtn.className='mp-chip-btn bchip bchip-allin';
     const capped=openExcl<myBalance;
@@ -10324,23 +10492,52 @@ function mpShowBetPanel(room,round){
     panel.appendChild(allInBtn);
   }
 
-  // Clear chip — wipes the stack so you can rebuild it. Returns you to
-  // 'pending', which also cancels the host's early-close countdown.
-  const clrBtn=document.createElement('button');
-  clrBtn.className='mp-chip-btn bchip bchip-clear';
-  clrBtn.textContent='\u2715';
-  clrBtn.title='Clear bet';
-  clrBtn.onclick=()=>mpClearBet();
-  panel.appendChild(clrBtn);
+  // BET chip (15i) — locks the stack and ends my turn. Lit once the stack
+  // meets the table minimum.
+  if(canAct){
+    const betBtn=document.createElement('button');
+    betBtn.className='mp-chip-btn bchip bchip-lock';
+    const ready=myCur>0&&(minBet<=0||myCur>=minBet);
+    betBtn.innerHTML=ready?'BET<br>$'+fmtChips(myCur):'BET';
+    betBtn.disabled=!ready; if(!ready)betBtn.classList.add('disabled');
+    betBtn.title=ready?'Lock in $'+myCur.toLocaleString():'Build a stack first';
+    betBtn.onclick=()=>mpLockBet();
+    panel.appendChild(betBtn);
+  }
 
-  // Pass chip (red ✕-style)
-  const passBtn=document.createElement('button');
-  passBtn.className='mp-chip-btn bchip bchip-pass';
-  passBtn.textContent='PASS';
-  passBtn.onclick=()=>mpPlacePass();
-  panel.appendChild(passBtn);
+  // Clear chip — wipes the stack so you can rebuild it (my turn only).
+  if(canAct){
+    const clrBtn=document.createElement('button');
+    clrBtn.className='mp-chip-btn bchip bchip-clear';
+    clrBtn.textContent='\u2715';
+    clrBtn.title='Clear bet';
+    clrBtn.onclick=()=>mpClearBet();
+    panel.appendChild(clrBtn);
+  }
+
+  // Pass chip — allowed any time before I've acted (sitting out early just
+  // hands the turn on faster).
+  if(!iAmDone){
+    const passBtn=document.createElement('button');
+    passBtn.className='mp-chip-btn bchip bchip-pass';
+    passBtn.textContent='PASS';
+    passBtn.onclick=()=>mpPlacePass();
+    panel.appendChild(passBtn);
+  }
 
   panel.style.display='flex';
+}
+// Lock my stack for the round and end my turn (15i). Rides on my own bet
+// entry like stop/stopAt do.
+function mpLockBet(){
+  if(!_mpRoomRef||!_mpMyUid||!mpBettingOpen())return;
+  if(!mpIsMyTurn()){showToast('Not your turn');return;}
+  const cur=mpMyBetAmount();
+  const mn=mpMinBet(_mpRoom);
+  if(cur<=0){showToast('Put chips down first');return;}
+  if(mn>0&&cur<mn){showToast('Table minimum is $'+mn.toLocaleString());return;}
+  _mpRoomRef.child('round/bets/'+_mpMyUid).update({status:'bet',amount:cur,done:true})
+    .catch(err=>{ console.error('Lock bet failed',err); showToast('Could not lock bet'); });
 }
 function mpHideBetPanel(){
   const panel=document.getElementById('mp-bet-panel');
@@ -10467,6 +10664,7 @@ function mpBettingOpen(){
 }
 function mpSetBet(amount){
   if(!_mpRoomRef||!_mpMyUid||!mpBettingOpen())return;
+  if(!mpIsMyTurn()){showToast('Wait your turn');return;}
   const myBalance=mpGetMyBalance(_mpRoom);
   if(amount>myBalance){
     showToast('Not enough chips');
@@ -10495,6 +10693,7 @@ function mpSetBet(amount){
 // tapping $25K on a $12K stack goes all in instead of doing nothing.
 function mpAddBet(amount){
   if(!_mpRoomRef||!_mpMyUid)return;
+  if(!mpIsMyTurn()){showToast('Wait your turn');return;}
   const myBalance=mpGetMyBalance(_mpRoom);
   if(myBalance<=0){showToast('Not enough chips');return;}
   // Ceiling is whichever runs out first: your stack or the open bank.
@@ -10513,6 +10712,7 @@ function mpAddBet(amount){
 // Clear the stack — back to 'pending' so the bet can be rebuilt from scratch.
 function mpClearBet(){
   if(!_mpRoomRef||!_mpMyUid||!mpBettingOpen())return;
+  if(!mpIsMyTurn()){showToast('Wait your turn');return;}
   _mpRoomRef.child('round/bets/'+_mpMyUid).update({
     status:'pending',
     amount:0
@@ -10523,9 +10723,12 @@ function mpClearBet(){
 }
 function mpPlacePass(){
   if(!_mpRoomRef||!_mpMyUid||!mpBettingOpen())return;
+  const mine=(_mpRoom.round.bets||{})[_mpMyUid];
+  if(mpBetTurnDone(mine)){showToast(mine.status==='pass'?'Already passed':'Your bet is locked');return;}
   _mpRoomRef.child('round/bets/'+_mpMyUid).update({
     status:'pass',
-    amount:0
+    amount:0,
+    done:true
   }).catch(err=>{
     console.error('Pass failed',err);
     showToast('Could not pass');
@@ -10536,16 +10739,19 @@ function mpPlacePass(){
 // (host-only — only one device should write the timeout to avoid races).
 function mpStartBetTimer(room,round){
   if(_mpBetTimerId){clearInterval(_mpBetTimerId);_mpBetTimerId=null;}
-  if(!round.bettingDeadline)return;
+  if(!round.turnUid||!round.turnDeadline)return;
   const tick=()=>{
-    const remain=Math.max(0,round.bettingDeadline-Date.now());
+    const remain=Math.max(0,round.turnDeadline-Date.now());
     const secs=Math.ceil(remain/1000);
     const el=document.getElementById('mp-bet-countdown');
     if(el)el.textContent=secs+'s';
     if(remain<=0){
       clearInterval(_mpBetTimerId);_mpBetTimerId=null;
-      // Host auto-passes anyone still pending
-      if(_mpIsHost){mpHostFinalizeBetting(round);}
+      // Host times the current shooter out (rides or passes); the resulting
+      // snapshot moves the turn on.
+      // Deferred: the first tick runs synchronously inside the render, which
+      // runs inside the room listener — a write here re-enters it (Oct 18).
+      if(_mpIsHost){setTimeout(()=>mpHostTurnTimeout(round),0);}
     }
   };
   tick();
