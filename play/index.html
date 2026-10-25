@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-25a';
+  window.CLO_BUILD = '2026-10-25b';
   document.addEventListener('DOMContentLoaded',()=>{ const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD; });
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
@@ -9278,7 +9278,9 @@ function prCreateRoom(){
     if(_createDone)return; _createDone=true; clearTimeout(_createTimeout);
     _prRoomCode=code;
     _prIsHost=true;
-    _presPublic=!!isPublic; presenceUpdate();   // 25a: "hosting <code>"
+    _presPublic=!!isPublic;
+    _presRoomInfo={seats:{},bank:Math.min(Number(room.stake||0)||room.bankroll,room.bankroll),minBet:Number(room.minBet||0)};
+    presenceUpdate();   // 25a: "hosting <code>"
     // NOTE: We deliberately do NOT call onDisconnect().remove() for the host.
     // Mobile browsers fire spurious disconnect events on backgrounding,
     // screen-lock, brief network blips, etc. — which used to nuke the room
@@ -9612,7 +9614,7 @@ function prResetState(){
   _prIsHost=false;
   // Stop any running heartbeat so old timers don't write to dead refs
   prStopHostHeartbeat();
-  _presPublic=false;
+  _presPublic=false; _presRoomInfo=null;
   setTimeout(()=>{ try{ if(typeof presenceUpdate==='function')presenceUpdate(); }catch(_){} },0);   // 25a: back to "lobby"
 }
 
@@ -9706,6 +9708,7 @@ function mpEnterTable(roomRef,isHost){
     }
     _mpRoom=room;
     mpCheckBuildMismatch(room);
+    if(_mpIsHost){ try{ presenceUpdate(); }catch(_){} }   // 25b: seats/bank/min for the lobby list
     mpRenderSeats(room);
     // Keep local balance in sync with seat balance (handles wins/losses written by host)
     mpSyncLocalBalanceFromRoom(room);
@@ -16350,13 +16353,30 @@ function claimAdFromRewards(){
 // Written from showScreen() (every screen change), after a room is created
 // or a seat is taken, and from prResetState(). Rules: read = any signed-in
 // user, write = only your own uid.
-let _presRef=null,_presArmed=false,_presLast='',_presPublic=false;
+let _presRef=null,_presArmed=false,_presLast='',_presPublic=false,_presRoomInfo=null;
+// 25b: the lobby cannot read /privrooms as a whole (rules grant reads per
+// room only — which is also why the old Open Tables list was always empty),
+// so a HOST's presence record carries the facts a joiner needs: public flag,
+// seats taken, bank on the table, minimum bet. Refreshed from every room
+// snapshot (sig-gated, so it only writes when something changed).
 function presenceState(){
   const active=document.querySelector('.screen.active');
   const sid=active?(active.id||''):'';
   if(_prRoomRef&&_prRoomCode){
-    const pub=_prIsHost?!!_presPublic:!!(_mpRoom&&_mpRoom.public);
-    return {state:_prIsHost?'hosting':'seated',room:String(_prRoomCode),public:pub};
+    const code=String(_prRoomCode);
+    const room=(_mpRoom&&String(_mpRoom.code||'')===code)?_mpRoom:null;
+    const pub=_prIsHost?!!_presPublic:!!(room&&room.public);
+    const st={state:_prIsHost?'hosting':'seated',room:code,public:pub};
+    if(_prIsHost){
+      const src=room||_presRoomInfo||{};
+      const seats=src.seats||{};
+      let n=0; for(const k in seats){ if(seats[k]&&seats[k].uid)n++; }
+      st.seats=n; st.max=PR_MAX_SEATS;
+      st.bank=room?mpBankCap(room):Number(src.bank||0);
+      st.minBet=room?mpMinBet(room):Number(src.minBet||0);
+      st.open=!!(room?room.status==='waiting':true);
+    }
+    return st;
   }
   if(sid==='screen-game'||sid==='screen-freeroll')return {state:'solo',room:null,public:false};
   return {state:'lobby',room:null,public:false};
@@ -16379,7 +16399,8 @@ function presenceUpdate(){
       build:String(window.CLO_BUILD||''),
       at:firebase.database.ServerValue.TIMESTAMP
     };
-    const sig=[rec.name,rec.avatar,rec.color,rec.state,rec.room,rec.public].join('|');
+    if(st.state==='hosting'){ rec.seats=Number(st.seats||0); rec.max=Number(st.max||PR_MAX_SEATS); rec.bank=Number(st.bank||0); rec.minBet=Number(st.minBet||0); rec.open=!!st.open; }
+    const sig=[rec.name,rec.avatar,rec.color,rec.state,rec.room,rec.public,rec.seats,rec.bank,rec.minBet,rec.open].join('|');
     if(sig===_presLast)return;
     _presLast=sig;
     _presRef.set(rec).catch(e=>{ _presLast=''; console.warn('[presence] write failed',e&&e.code?e.code:e); });
@@ -16422,8 +16443,10 @@ function renderOnline(){
   const players=_lastPlayers||[];
   const rooms=_lastRooms||[];
   const byHost={}; rooms.forEach(r=>{ if(r.room&&r.room.hostUid)byHost[r.room.hostUid]=r; });
-  // Card + badge counts
-  const onlineN=players.length, tablesN=rooms.length;
+  // A public table = a host whose presence says public (25b). The legacy
+  // rooms list is only a fallback for hosts on a build without presence.
+  const pubHosts=players.filter(p=>p.state==='hosting'&&p.public);
+  const onlineN=players.length, tablesN=pubHosts.length+rooms.filter(r=>!players.some(p=>p.uid===r.room.hostUid)).length;
   const c=document.getElementById('rc-live-count'); if(c)c.textContent=String(onlineN);
   const sub=document.getElementById('rc-live-sub');
   if(sub)sub.textContent=onlineN>0
@@ -16446,7 +16469,7 @@ function renderOnline(){
   }
   // Order: hosting a joinable public table, then lobby (invitable later),
   // then everyone else.
-  const rank=p=>{ const r=byHost[p.uid]; if(p.state==='hosting'&&r&&r.occupied<r.max)return 0; if(p.state==='lobby')return 1; if(p.state==='hosting')return 2; return 3; };
+  const rank=p=>{ if(p.state==='hosting'&&p.public&&(p.seats||0)<(p.max||PR_MAX_SEATS))return 0; if(p.state==='lobby')return 1; if(p.state==='hosting')return 2; return 3; };
   players.sort((a,b)=>rank(a)-rank(b)||String(a.name).localeCompare(String(b.name)));
   let html='';
   const seen={};
@@ -16457,14 +16480,15 @@ function renderOnline(){
     const r=byHost[p.uid];
     let status=PRES_STATE_LABEL[p.state]||'Online', right='', click='', cls='';
     if(p.state==='hosting'){
-      if(r){
-        const full=r.occupied>=r.max;
-        const cap=mpBankCap(r.room), mn=mpMinBet(r.room);
+      if(p.public&&p.room){
+        const occ=Number(p.seats||0), max=Number(p.max||PR_MAX_SEATS);
+        const full=occ>=max, cap=Number(p.bank||0), mn=Number(p.minBet||0);
+        const code=String(p.room).replace(/[^A-Z0-9]/gi,'');
         status='Hosting \u00b7 bank $'+cap.toLocaleString()+(mn>0?' \u00b7 min $'+mn.toLocaleString():'');
-        right='<div class="lot-seats'+(full?' full':'')+'">'+r.occupied+'/'+r.max+'</div>'+
+        right='<div class="lot-seats'+(full?' full':'')+'">'+occ+'/'+max+'</div>'+
               (full?'<button class="lot-join-btn" disabled>FULL</button>'
-                   :'<button class="lot-join-btn" onclick="event.stopPropagation();joinOpenTable(\''+r.code+'\')">JOIN</button>');
-        if(!full)click=' onclick="joinOpenTable(\''+r.code+'\')"'; else cls=' nojoin';
+                   :'<button class="lot-join-btn" onclick="event.stopPropagation();joinOpenTable(\''+code+'\')">JOIN</button>');
+        if(!full)click=' onclick="joinOpenTable(\''+code+'\')"'; else cls=' nojoin';
       }else{
         status='Hosting a private table'; right='<span class="lot-status">PRIVATE</span>'; cls=' nojoin';
       }
@@ -16532,6 +16556,10 @@ function startOpenTablesListener(){
     try{_openTablesRef.off('value',_openTablesListener);}catch(_){}
   }
   _openTablesRef=_rtdb.ref('privrooms');
+  // NOTE (25b): the rules only grant reads at privrooms/$code, so this
+  // whole-node listener is DENIED for everyone and has been since the Aug 20
+  // hardening. Kept only as a fallback that would light up if the rules ever
+  // opened it; the live list comes from /presence now.
   _openTablesListener=_openTablesRef.on('value',snap=>{
     const all=snap.val()||{};
     const rooms=[];
@@ -16556,7 +16584,7 @@ function startOpenTablesListener(){
       rooms.push({code:code,room:r,occupied:occupied,max:max});
     }
     renderOpenTables(rooms);
-  });
+  },err=>{ console.info('[open tables] whole-node read denied (expected) \u2014 using presence'); });
 }
 function stopOpenTablesListener(){
   if(_openTablesListener&&_openTablesRef){
