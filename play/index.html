@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-18d';
+  window.CLO_BUILD = '2026-10-25a';
   document.addEventListener('DOMContentLoaded',()=>{ const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD; });
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
@@ -2189,6 +2189,15 @@ html,body{
 }
 .lot-join-btn:active{transform:translateY(2px);box-shadow:0 0 0 #0a4a20;}
 .lot-join-btn:disabled{opacity:.4;cursor:not-allowed;}
+.lot-row.nojoin{cursor:default;}
+.lot-row.nojoin:hover{border-color:rgba(212,168,67,.2);}
+.lot-row.nojoin:active{transform:none;}
+.lot-status{
+  flex-shrink:0;font-family:'Bebas Neue',sans-serif;font-size:.72rem;letter-spacing:.08em;
+  color:rgba(207,232,255,.7);background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.14);padding:3px 8px;border-radius:7px;
+}
+.lot-status.on{color:#7dffa0;border-color:rgba(125,255,160,.4);background:rgba(40,160,32,.14);}
 
 @media (max-width:1000px) and (orientation:landscape){
   .lobby-open-tables{max-height:78px;padding:0 10px;margin-top:4px;}
@@ -5851,11 +5860,11 @@ html,body{
     <div class="ot-card">
       <div class="ot-head">
         <span class="lot-live-dot"></span>
-        <span class="ot-title">LIVE TABLES</span><span class="beta-tag">BETA</span>
+        <span class="ot-title">WHO'S ONLINE</span><span class="beta-tag">BETA</span>
         <span class="lot-header-count" id="lot-count" style="font-family:'Bebas Neue',sans-serif;color:#fff;font-size:1.1rem;">0</span>
         <button class="ot-close" onclick="closeOpenTables()">✕</button>
       </div>
-      <div class="ot-note">Multiplayer is in beta — rough edges expected.</div>
+      <div class="ot-note">Players in the app right now. Tap a host to join their table.</div>
       <div class="ot-body" id="lobby-open-tables">
         <div id="lot-list"><div style="text-align:center;color:rgba(207,232,255,.5);font-size:.75rem;padding:8px 4px;font-style:italic;">Loading\u2026</div></div>
       </div>
@@ -7133,6 +7142,8 @@ window.addEventListener('load',()=>{
     try{
       _rtdb.ref('.info/connected').on('value',snap=>{
         window._rtdbConnected=(snap.val()===true);
+        // 25a: re-arm + rewrite our presence record after every reconnect.
+        if(snap.val()===true){ try{ if(typeof presenceReconnected==='function')presenceReconnected(); }catch(_){} }
       });
     }catch(e){console.warn('[rtdb] connected listener failed:',e);}
     // Force LOCAL persistence so the (anonymous) UID survives app reboots.
@@ -7323,6 +7334,8 @@ function showScreen(id){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   const el=document.getElementById('screen-'+id);
   if(el)el.classList.add('active');
+  // Presence (25a): every screen change is a possible state change.
+  setTimeout(()=>{ try{ if(typeof presenceUpdate==='function')presenceUpdate(); }catch(_){} },0);
   // Force hide splash when navigating away
   if(id!=='splash'){
     const splash=document.getElementById('screen-splash');
@@ -9265,6 +9278,7 @@ function prCreateRoom(){
     if(_createDone)return; _createDone=true; clearTimeout(_createTimeout);
     _prRoomCode=code;
     _prIsHost=true;
+    _presPublic=!!isPublic; presenceUpdate();   // 25a: "hosting <code>"
     // NOTE: We deliberately do NOT call onDisconnect().remove() for the host.
     // Mobile browsers fire spurious disconnect events on backgrounding,
     // screen-lock, brief network blips, etc. — which used to nuke the room
@@ -9325,6 +9339,7 @@ function prJoinRoom(){
       _prIsHost=false;
       _prRoomRef=ref;
       _prMySeatKey=mySeatKey;
+      presenceUpdate();          // 25a: "seated at <code>"
       prArmSeatPresence(true);   // clears 'absent', re-arms, and asserts the
                                  // PROFILE balance over whatever snapshot the
                                  // held seat still carries
@@ -9394,6 +9409,7 @@ function prJoinRoom(){
       _prIsHost=false;
       _prRoomRef=ref;
       _prMySeatKey=mySeat;
+      presenceUpdate();          // 25a: "seated at <code>"
       prArmSeatPresence();
       if(btn){btn.disabled=false;btn.textContent='🎟️ Join Table';}
       prEnterWaitingRoom();
@@ -9596,6 +9612,8 @@ function prResetState(){
   _prIsHost=false;
   // Stop any running heartbeat so old timers don't write to dead refs
   prStopHostHeartbeat();
+  _presPublic=false;
+  setTimeout(()=>{ try{ if(typeof presenceUpdate==='function')presenceUpdate(); }catch(_){} },0);   // 25a: back to "lobby"
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -13017,6 +13035,7 @@ async function renderLobby(){
   // Subscribe to public tables for the live Open Tables list. Listener
   // auto-tears-down via stopOpenTablesListener when player leaves lobby.
   if(typeof startOpenTablesListener==='function')startOpenTablesListener();
+  if(typeof startPresenceListener==='function')startPresenceListener();
 }
 
 // ── SHOP "new specials" badge ──────────────────────────────────────────────
@@ -13057,10 +13076,10 @@ function buildCarousel(){
   liveCard.id = 'rc-live-tables';
   liveCard.innerHTML = `
     <div class="rc-inner">
-      <div class="rc-live-pulse"><span class="rc-live-dot"></span><span class="rc-live-label">LIVE TABLES</span><span class="beta-tag">BETA</span></div>
-      <div class="rc-live-count" id="rc-live-count">${_openTablesCount}</div>
-      <div class="rc-live-sub" id="rc-live-sub">Tap to join a live table</div>
-      <div class="rc-live-cta">🎲 JOIN A TABLE</div>
+      <div class="rc-live-pulse"><span class="rc-live-dot"></span><span class="rc-live-label">WHO'S ONLINE</span><span class="beta-tag">BETA</span></div>
+      <div class="rc-live-count" id="rc-live-count">${(_lastPlayers||[]).length}</div>
+      <div class="rc-live-sub" id="rc-live-sub">Tap to see who's on</div>
+      <div class="rc-live-cta">👥 PLAYERS &amp; TABLES</div>
     </div>`;
   {
     let _lStartX=0,_lStartY=0;
@@ -13086,7 +13105,7 @@ function buildCarousel(){
     };
   }
   carousel.appendChild(liveCard);
-  updateLiveTablesCard();
+  renderOnline();
 
   ROOMS.forEach(room=>{
     const canAfford = balance >= room.min;
@@ -16323,6 +16342,159 @@ function claimAdFromRewards(){
 }
 
 // Update the lobby 🎁 button to pulse when any reward is ready
+// ── PRESENCE / WHO'S ONLINE (Oct 25 2026, build 25a) ────────────────────────
+// Every signed-in player keeps one record at presence/<uid> while the app is
+// open: who they are and what they're doing (lobby / hosting <code> / seated
+// at <code> / solo). The server removes it on disconnect (onDisconnect), and
+// the .info/connected watcher re-arms + rewrites it after every reconnect.
+// Written from showScreen() (every screen change), after a room is created
+// or a seat is taken, and from prResetState(). Rules: read = any signed-in
+// user, write = only your own uid.
+let _presRef=null,_presArmed=false,_presLast='',_presPublic=false;
+function presenceState(){
+  const active=document.querySelector('.screen.active');
+  const sid=active?(active.id||''):'';
+  if(_prRoomRef&&_prRoomCode){
+    const pub=_prIsHost?!!_presPublic:!!(_mpRoom&&_mpRoom.public);
+    return {state:_prIsHost?'hosting':'seated',room:String(_prRoomCode),public:pub};
+  }
+  if(sid==='screen-game'||sid==='screen-freeroll')return {state:'solo',room:null,public:false};
+  return {state:'lobby',room:null,public:false};
+}
+function presenceUpdate(){
+  try{
+    if(!_rtdb||!_uid||!_profile||!firebase.database)return;
+    if(!_presRef||_presRef.key!==_uid){ _presRef=_rtdb.ref('presence/'+_uid); _presArmed=false; _presLast=''; }
+    if(!_presArmed){ _presArmed=true; try{ _presRef.onDisconnect().remove(); }catch(_){} }
+    const p=_profile; const st=presenceState();
+    const rec={
+      name:String(p.username||'Player').slice(0,24),
+      avatar:String(p.avatarEmoji||'\ud83c\udfb2'),
+      color:String(p.avatarColor||'#28a020'),
+      avatarId:String(p.avatarId||'dice'),
+      tier:String(p.lastSeenTier||'Shorty'),
+      state:st.state,
+      room:st.room||null,
+      public:!!st.public,
+      build:String(window.CLO_BUILD||''),
+      at:firebase.database.ServerValue.TIMESTAMP
+    };
+    const sig=[rec.name,rec.avatar,rec.color,rec.state,rec.room,rec.public].join('|');
+    if(sig===_presLast)return;
+    _presLast=sig;
+    _presRef.set(rec).catch(e=>{ _presLast=''; console.warn('[presence] write failed',e&&e.code?e.code:e); });
+  }catch(e){ console.warn('[presence] update threw',e); }
+}
+// Called when the socket comes back: the old onDisconnect was consumed when
+// it fired, and the record it removed has to be written again.
+function presenceReconnected(){ _presArmed=false; _presLast=''; presenceUpdate(); }
+
+// Live list of everyone online (except me). Combined with the public-table
+// list into one "who's online" panel — tables are shown under their host.
+let _presListener=null,_presListRef=null,_lastRooms=[],_lastPlayers=[];
+function startPresenceListener(){
+  if(!_rtdb)return;
+  stopPresenceListener();
+  _presListRef=_rtdb.ref('presence');
+  _presListener=_presListRef.on('value',snap=>{
+    const all=snap.val()||{};
+    const list=[];
+    const now=(typeof mpNow==='function')?mpNow():Date.now();
+    for(const uid in all){
+      if(uid===_uid)continue;
+      const p=all[uid];
+      if(!p||!p.name)continue;
+      // A record the server never got to remove (e.g. a crashed tab on a
+      // flaky connection) would sit forever: ignore anything 2h stale.
+      if(typeof p.at==='number'&&now-p.at>2*60*60*1000)continue;
+      list.push(Object.assign({uid},p));
+    }
+    _lastPlayers=list;
+    renderOnline();
+  },err=>console.warn('[presence] list listener failed',err&&err.code?err.code:err));
+}
+function stopPresenceListener(){
+  if(_presListener&&_presListRef){ try{_presListRef.off('value',_presListener);}catch(_){} }
+  _presListener=null;_presListRef=null;
+}
+const PRES_STATE_LABEL={lobby:'In the lobby',hosting:'Hosting',seated:'At a table',solo:'Playing solo'};
+function renderOnline(){
+  const players=_lastPlayers||[];
+  const rooms=_lastRooms||[];
+  const byHost={}; rooms.forEach(r=>{ if(r.room&&r.room.hostUid)byHost[r.room.hostUid]=r; });
+  // Card + badge counts
+  const onlineN=players.length, tablesN=rooms.length;
+  const c=document.getElementById('rc-live-count'); if(c)c.textContent=String(onlineN);
+  const sub=document.getElementById('rc-live-sub');
+  if(sub)sub.textContent=onlineN>0
+    ? (onlineN+' online'+(tablesN>0?' \u00b7 '+tablesN+(tablesN===1?' table live':' tables live'):''))
+    : (tablesN>0?tablesN+(tablesN===1?' table live':' tables live'):'Nobody else on right now');
+  const pdot=document.getElementById('lobby-private-dot');
+  if(pdot)pdot.style.display=(onlineN>0||tablesN>0)?'flex':'none';
+  const countEl=document.getElementById('lot-count'); if(countEl)countEl.textContent=String(onlineN);
+  const list=document.getElementById('lot-list');
+  if(!list)return;
+  if(onlineN===0&&tablesN===0){
+    list.innerHTML=
+      '<div class="lot-empty-cta">'+
+        '<div class="lot-empty-emoji">\ud83d\udc65</div>'+
+        '<div class="lot-empty-head">Nobody else on right now</div>'+
+        '<div class="lot-empty-sub">Host a table and it shows up here for whoever logs in next \u2014 or send a friend your invite link.</div>'+
+        '<button class="lot-empty-btn" onclick="closeOpenTables();goHostFromEmpty();">\ud83d\udc51 HOST A TABLE</button>'+
+      '</div>';
+    return;
+  }
+  // Order: hosting a joinable public table, then lobby (invitable later),
+  // then everyone else.
+  const rank=p=>{ const r=byHost[p.uid]; if(p.state==='hosting'&&r&&r.occupied<r.max)return 0; if(p.state==='lobby')return 1; if(p.state==='hosting')return 2; return 3; };
+  players.sort((a,b)=>rank(a)-rank(b)||String(a.name).localeCompare(String(b.name)));
+  let html='';
+  const seen={};
+  players.forEach(p=>{
+    seen[p.uid]=true;
+    const badge=seatBadgeHTML({avatarId:p.avatarId,avatarEmoji:p.avatar,avatarColor:p.color,tier:p.tier},28);
+    const name=String(p.name).slice(0,18);
+    const r=byHost[p.uid];
+    let status=PRES_STATE_LABEL[p.state]||'Online', right='', click='', cls='';
+    if(p.state==='hosting'){
+      if(r){
+        const full=r.occupied>=r.max;
+        const cap=mpBankCap(r.room), mn=mpMinBet(r.room);
+        status='Hosting \u00b7 bank $'+cap.toLocaleString()+(mn>0?' \u00b7 min $'+mn.toLocaleString():'');
+        right='<div class="lot-seats'+(full?' full':'')+'">'+r.occupied+'/'+r.max+'</div>'+
+              (full?'<button class="lot-join-btn" disabled>FULL</button>'
+                   :'<button class="lot-join-btn" onclick="event.stopPropagation();joinOpenTable(\''+r.code+'\')">JOIN</button>');
+        if(!full)click=' onclick="joinOpenTable(\''+r.code+'\')"'; else cls=' nojoin';
+      }else{
+        status='Hosting a private table'; right='<span class="lot-status">PRIVATE</span>'; cls=' nojoin';
+      }
+    }else if(p.state==='seated'){
+      right='<span class="lot-status">AT A TABLE</span>'; cls=' nojoin';
+    }else if(p.state==='solo'){
+      right='<span class="lot-status">SOLO</span>'; cls=' nojoin';
+    }else{
+      right='<span class="lot-status on">ONLINE</span>'; cls=' nojoin';   // invite button arrives in step 3
+    }
+    html+='<div class="lot-row'+cls+'"'+click+'>'+badge+
+      '<div class="lot-info"><div class="lot-host">'+name+'</div><div class="lot-room">'+status+'</div></div>'+right+'</div>';
+  });
+  // Public tables whose host has no presence record (older build): keep them
+  // reachable, listed as before.
+  rooms.forEach(r=>{
+    if(seen[r.room.hostUid])return;
+    const room=r.room, full=r.occupied>=r.max;
+    const name=(room.hostName||'Host').slice(0,18);
+    const cap=mpBankCap(room), mn=mpMinBet(room);
+    const badge=seatBadgeHTML({avatarId:room.hostAvatarId,avatarEmoji:room.hostAvatar,avatarColor:room.hostColor,tier:room.hostTier},28);
+    html+='<div class="lot-row'+(full?' nojoin':'')+'"'+(full?'':' onclick="joinOpenTable(\''+r.code+'\')"')+'>'+badge+
+      '<div class="lot-info"><div class="lot-host">'+name+'\u2019s Table</div><div class="lot-room">Bank $'+cap.toLocaleString()+(mn>0?' \u00b7 min $'+mn.toLocaleString():'')+'</div></div>'+
+      '<div class="lot-seats'+(full?' full':'')+'">'+r.occupied+'/'+r.max+'</div>'+
+      (full?'<button class="lot-join-btn" disabled>FULL</button>':'<button class="lot-join-btn" onclick="event.stopPropagation();joinOpenTable(\''+r.code+'\')">JOIN</button>')+
+      '</div>';
+  });
+  list.innerHTML=html;
+}
+
 // ── Open Tables (lobby live list) ────────────────────────────────────
 // Watches /privrooms for rooms with public:true and shows them in the
 // lobby. Each row is one-tap to join. Reuses the existing prAttemptJoin
@@ -16393,7 +16565,12 @@ function stopOpenTablesListener(){
   _openTablesListener=null;_openTablesRef=null;
 }
 function renderOpenTables(rooms){
-  // Remember the latest live count so the LIVE TABLES carousel card can show it
+  // 25a: tables now render inside the who's-online panel, under their host.
+  _openTablesCount = (rooms&&rooms.length)||0;
+  _lastRooms=rooms||[];
+  renderOnline();
+}
+function renderOpenTables_legacy(rooms){
   _openTablesCount = (rooms&&rooms.length)||0;
   updateLiveTablesCard();
   const wrap=document.getElementById('lobby-open-tables');
