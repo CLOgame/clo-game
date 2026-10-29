@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-29b';
+  window.CLO_BUILD = '2026-10-29c';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -8923,8 +8923,17 @@ function prArmSeatPresence(pushBalance){
     // Back online: clear the absent flag the server set for us and register
     // fresh handlers, since the previous ones were consumed when they fired.
     // Deliberately does NOT touch balance — see above.
-    _prRoomRef.child('seats/'+_prMySeatKey+'/status').set('active').catch(()=>{});
-    _prRoomRef.child('seats/'+_prMySeatKey+'/status').onDisconnect().set('absent');
+    // 29c: the host may have freed the seat while we were gone. Confirm it
+    // still holds our uid first — writing 'active' into an empty slot would
+    // create a uid-less ghost seat, and onto a new occupant would mark THEM
+    // absent on our next drop. The room listener handles the leave.
+    const ref=_prRoomRef, key=_prMySeatKey, me=_uid;
+    ref.child('seats/'+key+'/uid').once('value').then(snap=>{
+      if(snap.val()!==me){ console.log('[reaper] seat no longer mine on reconnect'); return; }
+      if(_prRoomRef!==ref||_prMySeatKey!==key)return;   // left meanwhile
+      ref.child('seats/'+key+'/status').set('active').catch(()=>{});
+      ref.child('seats/'+key+'/status').onDisconnect().set('absent');
+    }).catch(()=>{});
     // (no bet-status handler here either; see prArmSeatPresence)
   });
 }
@@ -9221,6 +9230,63 @@ function prStopHostHeartbeat(){
   if(_prHeartbeatId){clearInterval(_prHeartbeatId);_prHeartbeatId=null;}
   document.removeEventListener('visibilitychange',prHeartbeatOnVisible);
 }
+// ── ABSENT-SEAT REAPER (29c, Oct 29 2026) ───────────────────────────────────
+// A seat whose player dropped is held (status 'absent') so they can come
+// straight back — but someone who never returns held the seat forever and the
+// table read "full". The HOST now frees a seat that has been absent for
+// MP_REAP_MS, only between hands (waiting room, no round, or settlement), and
+// never while the player's presence record says they are alive and seated
+// here (their own reconnect watcher clears the flag within seconds).
+const MP_REAP_MS=3*60*1000;
+let _mpAbsentSince={},_mpReaperId=null,_prLastRoom=null;
+function mpReaperTick(){
+  try{
+    if(!_prIsHost||!_prRoomRef)return;
+    const room=_mpRoom||_prLastRoom;
+    if(!room||!room.seats)return;
+    const phase=room.round&&room.round.phase;
+    const safe=(room.status==='waiting')||!room.round||phase==='settlement';
+    const now=Date.now();
+    const seats=room.seats;
+    for(const k in seats){
+      const sObj=seats[k];
+      if(!sObj||!sObj.uid)continue;
+      if(sObj.status!=='absent'){ delete _mpAbsentSince[sObj.uid]; continue; }
+      if(!_mpAbsentSince[sObj.uid]){ _mpAbsentSince[sObj.uid]=now; continue; }
+      if(now-_mpAbsentSince[sObj.uid]<MP_REAP_MS)continue;
+      if(!safe)continue;
+      const live=(_lastPlayers||[]).find(p=>p.uid===sObj.uid);
+      if(live&&live.state==='seated'&&String(live.room||'')===String(_prRoomCode||''))continue;
+      delete _mpAbsentSince[sObj.uid];
+      const name=sObj.username||'A player';
+      _prRoomRef.child('seats/'+k).remove()
+        .then(()=>{ showToast(name+'\u2019s seat was freed \u2014 away '+Math.round(MP_REAP_MS/60000)+' min'); console.log('[reaper] freed seat',k,sObj.uid); })
+        .catch(e=>console.warn('[reaper] remove failed',e&&e.code?e.code:e));
+    }
+  }catch(e){ console.warn('[reaper] tick threw',e); }
+}
+function mpStartReaper(){ if(_mpReaperId)return; _mpAbsentSince={}; _mpReaperId=setInterval(mpReaperTick,15000); }
+function mpStopReaper(){ if(_mpReaperId){clearInterval(_mpReaperId);_mpReaperId=null;} _mpAbsentSince={}; }
+// 29c, player side of the reaper. Once a snapshot has shown OUR seat under
+// our key, a later snapshot where that key is empty or holds someone else
+// means the host freed it while we were away. Leave quietly so the stale
+// seat key cannot write 'active' into an empty slot (a ghost seat with no
+// uid) or onto whoever sat down there after us. Returns true if we left.
+let _prSeatSeen=false;
+function mpSeatFreedCheck(room,inGame){
+  try{
+    if(_prIsHost||_prMySeatKey===null||!room||!room.seats)return false;
+    const me=_uid||_mpMyUid;
+    const mine=room.seats[_prMySeatKey];
+    if(mine&&mine.uid===me){ _prSeatSeen=true; return false; }
+    if(!_prSeatSeen)return false;      // our own join write hasn't echoed yet
+    console.log('[reaper] my seat is gone — leaving table');
+    showToast('Your seat was freed — you were away too long');
+    if(inGame){ mpLeaveTable(true); }
+    else{ prResetState(); goToLobby(); }
+    return true;
+  }catch(e){ console.warn('[reaper] seat check threw',e); return false; }
+}
 function prHeartbeatOnVisible(){
   if(document.visibilityState==='visible')prWriteHeartbeat();
 }
@@ -9311,6 +9377,7 @@ function prCreateRoom(){
     _presPublic=!!isPublic;
     _presRoomInfo={seats:{},bank:Math.min(Number(room.stake||0)||room.bankroll,room.bankroll),minBet:Number(room.minBet||0)};
     presenceUpdate();   // 25a: "hosting <code>"
+    mpStartReaper();    // 29c
     // NOTE: We deliberately do NOT call onDisconnect().remove() for the host.
     // Mobile browsers fire spurious disconnect events on backgrounding,
     // screen-lock, brief network blips, etc. — which used to nuke the room
@@ -9478,6 +9545,8 @@ function prEnterWaitingRoom(){
       }
       return;
     }
+    _prLastRoom=room;
+    if(mpSeatFreedCheck(room,false))return;   // 29c
     prRenderSeats(room);
     // If the host started the game, shooters follow.
     // CRITICAL: guard against multiple listener fires triggering mpEnterTable
@@ -9644,6 +9713,7 @@ function prResetState(){
   _prIsHost=false;
   // Stop any running heartbeat so old timers don't write to dead refs
   prStopHostHeartbeat();
+  mpStopReaper(); _prLastRoom=null; _prSeatSeen=false;   // 29c
   _presPublic=false; _presRoomInfo=null;
   setTimeout(()=>{ try{ if(typeof presenceUpdate==='function')presenceUpdate(); }catch(_){} },0);   // 25a: back to "lobby"
 }
@@ -9737,6 +9807,7 @@ function mpEnterTable(roomRef,isHost){
       return;
     }
     _mpRoom=room;
+    if(mpSeatFreedCheck(room,true))return;   // 29c
     mpCheckBuildMismatch(room);
     if(_mpIsHost){ try{ presenceUpdate(); }catch(_){} }   // 25b: seats/bank/min for the lobby list
     mpRenderSeats(room);
