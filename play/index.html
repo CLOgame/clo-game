@@ -38,8 +38,14 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-25b';
-  document.addEventListener('DOMContentLoaded',()=>{ const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD; });
+  window.CLO_BUILD = '2026-10-29a';
+  document.addEventListener('DOMContentLoaded',()=>{
+    const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
+    // 29a: the who's-online panel is opened from the table waiting room as
+    // well as the lobby, so it cannot live inside #screen-lobby (inactive
+    // screens are display:none). Re-home it on <body>.
+    const ov=document.getElementById('lobby-open-tables-overlay'); if(ov)document.body.appendChild(ov);
+  });
   // Deeper stack traces (default is 10 frames). The recurring RangeError in
   // firebase-database has never shown a play/:NNNN frame because the SDK's
   // own frames fill the first 10. Costs nothing unless an error is created.
@@ -2198,6 +2204,29 @@ html,body{
   border:1px solid rgba(255,255,255,.14);padding:3px 8px;border-radius:7px;
 }
 .lot-status.on{color:#7dffa0;border-color:rgba(125,255,160,.4);background:rgba(40,160,32,.14);}
+.lot-status.sent{color:#ffd96b;border-color:rgba(255,217,107,.45);background:rgba(212,168,67,.12);}
+.mp-invite-card{
+  position:fixed;left:50%;bottom:18px;transform:translate(-50%,140%);
+  z-index:9100;max-width:min(94vw,520px);width:max-content;
+  display:flex;align-items:center;gap:10px;
+  background:linear-gradient(180deg,#0f3a1c,#07200f);
+  border:1.5px solid #7ce850;border-radius:14px;
+  padding:9px 10px 9px 12px;
+  color:#e9ffe0;font-family:system-ui,sans-serif;font-size:.86rem;line-height:1.3;
+  box-shadow:0 10px 28px rgba(0,0,0,.65),0 0 24px rgba(124,232,80,.25);
+  transition:transform .28s cubic-bezier(.2,.9,.3,1.2);
+}
+.mp-invite-card.show{transform:translate(-50%,0);}
+.mp-invite-txt{flex:1;min-width:0;}
+.mp-invite-txt b{color:#fff;}
+.mp-invite-join{
+  background:linear-gradient(135deg,#7ce850,#28a020 60%,#106410);
+  color:#fff;border:1px solid #d4f5c0;border-radius:999px;
+  padding:7px 14px;font-family:'Bebas Neue',sans-serif;font-size:1.05rem;letter-spacing:.08em;cursor:pointer;
+  box-shadow:0 3px 0 #0a3a0a;
+}
+.mp-invite-join:active{transform:translateY(2px);box-shadow:none;}
+.mp-invite-x{background:none;border:0;color:#e9ffe0;opacity:.7;font-size:1rem;cursor:pointer;padding:4px 6px;}
 
 @media (max-width:1000px) and (orientation:landscape){
   .lobby-open-tables{max-height:78px;padding:0 10px;margin-top:4px;}
@@ -6016,6 +6045,7 @@ html,body{
       <div class="pr-code-label">Table Code</div>
       <div class="pr-code-value" id="pr-room-code">—</div>
       <button class="pr-code-share" onclick="prShareCode()">📋 Copy Code</button>
+      <button class="pr-code-share" onclick="prOpenInvitePanel()">👥 Invite Players</button>
     </div>
     <div class="pr-seats-title">Players at the Table</div>
     <div class="pr-seat-list" id="pr-seat-list"></div>
@@ -16385,6 +16415,7 @@ function presenceUpdate(){
   try{
     if(!_rtdb||!_uid||!_profile||!firebase.database)return;
     if(!_presRef||_presRef.key!==_uid){ _presRef=_rtdb.ref('presence/'+_uid); _presArmed=false; _presLast=''; }
+    try{ startInviteListener(); }catch(_){}   // 29a
     if(!_presArmed){ _presArmed=true; try{ _presRef.onDisconnect().remove(); }catch(_){} }
     const p=_profile; const st=presenceState();
     const rec={
@@ -16457,6 +16488,10 @@ function renderOnline(){
   const countEl=document.getElementById('lot-count'); if(countEl)countEl.textContent=String(onlineN);
   const list=document.getElementById('lot-list');
   if(!list)return;
+  const note=document.querySelector('#lobby-open-tables-overlay .ot-note');
+  if(note)note.textContent=(typeof inviteCanSendNow==='function'&&inviteCanSendNow())
+    ? 'Tap INVITE to call a player to your table \u2014 they get 60 seconds to join.'
+    : 'Players in the app right now. Tap a host to join their table.';
   if(onlineN===0&&tablesN===0){
     list.innerHTML=
       '<div class="lot-empty-cta">'+
@@ -16469,7 +16504,7 @@ function renderOnline(){
   }
   // Order: hosting a joinable public table, then lobby (invitable later),
   // then everyone else.
-  const rank=p=>{ if(p.state==='hosting'&&p.public&&(p.seats||0)<(p.max||PR_MAX_SEATS))return 0; if(p.state==='lobby')return 1; if(p.state==='hosting')return 2; return 3; };
+  const rank=p=>{ if(p.state==='hosting'&&p.public&&(p.seats||0)<(p.max||PR_MAX_SEATS))return 0; if(p.state==='lobby')return 1; if(p.state==='solo')return 2; if(p.state==='hosting')return 3; return 4; };
   players.sort((a,b)=>rank(a)-rank(b)||String(a.name).localeCompare(String(b.name)));
   let html='';
   const seen={};
@@ -16494,10 +16529,16 @@ function renderOnline(){
       }
     }else if(p.state==='seated'){
       right='<span class="lot-status">AT A TABLE</span>'; cls=' nojoin';
-    }else if(p.state==='solo'){
-      right='<span class="lot-status">SOLO</span>'; cls=' nojoin';
     }else{
-      right='<span class="lot-status on">ONLINE</span>'; cls=' nojoin';   // invite button arrives in step 3
+      // Lobby / solo player. From a waiting table: INVITE (29a).
+      if(typeof inviteCanSendNow==='function'&&inviteCanSendNow()){
+        right=invitePendingTo(p.uid)
+          ? '<span class="lot-status sent">SENT</span>'
+          : '<button class="lot-join-btn" onclick="event.stopPropagation();inviteSend(\''+p.uid+'\')">INVITE</button>';
+      }else{
+        right=(p.state==='solo')?'<span class="lot-status">SOLO</span>':'<span class="lot-status on">ONLINE</span>';
+      }
+      cls=' nojoin';
     }
     html+='<div class="lot-row'+cls+'"'+click+'>'+badge+
       '<div class="lot-info"><div class="lot-host">'+name+'</div><div class="lot-room">'+status+'</div></div>'+right+'</div>';
@@ -16517,6 +16558,134 @@ function renderOnline(){
       '</div>';
   });
   list.innerHTML=html;
+}
+
+// ── INVITES (Oct 29 2026, build 29a) ────────────────────────────────────────
+// From a table's waiting room, tap INVITE on a player who is in the lobby (or
+// playing solo). The invite is one record at invites/<their uid>/<my uid>:
+// who I am + my table code + an expiry 60s out (server time). Their app
+// listens on invites/<own uid> and shows a card with JOIN / dismiss; JOIN
+// runs the normal code-join, so private tables work too. Either side may
+// delete the record; expired ones are swept by the receiver. Rules: read own
+// node, write where you are the sender or the receiver, validated fields.
+const INVITE_TTL_MS=60000;
+let _invitesSent={};          // targetUid -> exp (ms, server time)
+let _inviteLastAt=0;
+let _invListener=null,_invRef=null,_invShownKey=null,_invTimer=null;
+function inviteCanSendNow(){
+  // Only from a table that is still waiting for players.
+  if(!_prRoomRef||!_prRoomCode)return false;
+  if(_mpRoom&&_mpRoom.status&&_mpRoom.status!=='waiting')return false;
+  return true;
+}
+function invitePendingTo(uid){
+  const exp=_invitesSent[uid];
+  if(!exp)return false;
+  if(((typeof mpNow==='function')?mpNow():Date.now())>exp){ delete _invitesSent[uid]; return false; }
+  return true;
+}
+function inviteSend(uid){
+  try{
+    if(!_rtdb||!_uid||!_profile)return;
+    if(!inviteCanSendNow()){ showToast('Host or join a table first, then invite'); return; }
+    const target=(_lastPlayers||[]).find(p=>p.uid===uid);
+    if(!target){ showToast('They just went offline'); return; }
+    if(target.state!=='lobby'&&target.state!=='solo'){ showToast(target.name+' is already at a table'); return; }
+    if(invitePendingTo(uid)){ showToast('Invite already sent'); return; }
+    const now=(typeof mpNow==='function')?mpNow():Date.now();
+    if(now-_inviteLastAt<5000){ showToast('One at a time \u2014 give it a few seconds'); return; }
+    _inviteLastAt=now;
+    const p=_profile;
+    const rec={
+      from:String(_uid),
+      name:String(p.username||'Player').slice(0,24),
+      avatar:String(p.avatarEmoji||'\ud83c\udfb2'),
+      color:String(p.avatarColor||'#28a020'),
+      avatarId:String(p.avatarId||'dice'),
+      tier:String(p.lastSeenTier||'Shorty'),
+      room:String(_prRoomCode),
+      at:now, exp:now+INVITE_TTL_MS
+    };
+    _invitesSent[uid]=rec.exp;
+    renderOnline();
+    _rtdb.ref('invites/'+uid+'/'+_uid).set(rec).then(()=>{
+      showToast('Invite sent to '+target.name+' \ud83d\udc8c');
+    }).catch(e=>{
+      delete _invitesSent[uid]; renderOnline();
+      console.warn('[invite] send failed',e&&e.code?e.code:e);
+      showToast('Could not send the invite');
+    });
+  }catch(e){ console.warn('[invite] send threw',e); }
+}
+// Receiver side. Started once a signed-in uid exists (from presenceUpdate).
+function startInviteListener(){
+  if(!_rtdb||!_uid)return;
+  if(_invRef&&_invRef.key===_uid)return;      // already listening for this uid
+  stopInviteListener();
+  _invRef=_rtdb.ref('invites/'+_uid);
+  _invListener=_invRef.on('value',snap=>{
+    const all=snap.val()||{};
+    const now=(typeof mpNow==='function')?mpNow():Date.now();
+    let best=null;
+    for(const from in all){
+      const inv=all[from];
+      if(!inv||!inv.room)continue;
+      if(typeof inv.exp==='number'&&inv.exp<now){ try{ _invRef.child(from).remove(); }catch(_){} continue; }
+      if(!best||(inv.at||0)>(best.at||0))best=Object.assign({from},inv);
+    }
+    if(!best){ inviteHideCard(); return; }
+    // Already at a table: leave it alone (it expires on its own).
+    if(_prRoomRef)return;
+    inviteShowCard(best);
+  },err=>console.warn('[invite] listener failed',err&&err.code?err.code:err));
+}
+function stopInviteListener(){
+  if(_invListener&&_invRef){ try{_invRef.off('value',_invListener);}catch(_){} }
+  _invListener=null;_invRef=null;
+}
+function inviteShowCard(inv){
+  const key=inv.from+':'+inv.room+':'+(inv.at||0);
+  if(_invShownKey===key)return;
+  _invShownKey=key;
+  let c=document.getElementById('mp-invite-card');
+  if(!c){
+    c=document.createElement('div'); c.id='mp-invite-card'; c.className='mp-invite-card';
+    document.body.appendChild(c);
+  }
+  const badge=seatBadgeHTML({avatarId:inv.avatarId,avatarEmoji:inv.avatar,avatarColor:inv.color,tier:inv.tier},34);
+  const name=String(inv.name||'A player').slice(0,18);
+  const code=String(inv.room).replace(/[^A-Z0-9]/gi,'');
+  c.innerHTML=badge+
+    '<div class="mp-invite-txt"><b>'+name+'</b> invited you to table <b>'+code+'</b></div>'+
+    '<button class="mp-invite-join" onclick="inviteAccept(\''+inv.from+'\',\''+code+'\')">JOIN</button>'+
+    '<button class="mp-invite-x" onclick="inviteDismiss(\''+inv.from+'\')">\u2715</button>';
+  requestAnimationFrame(()=>c.classList.add('show'));
+  try{ const ctx=getACtx(),n=ctx.currentTime; tone(660,'sine',.12,.18,n); tone(880,'sine',.12,.28,n+.14); }catch(_){}
+  if(_invTimer)clearTimeout(_invTimer);
+  const now=(typeof mpNow==='function')?mpNow():Date.now();
+  _invTimer=setTimeout(()=>inviteDismiss(inv.from),Math.max(1000,(inv.exp||now+INVITE_TTL_MS)-now));
+}
+function inviteHideCard(){
+  const c=document.getElementById('mp-invite-card');
+  if(c)c.classList.remove('show');
+  _invShownKey=null;
+  if(_invTimer){clearTimeout(_invTimer);_invTimer=null;}
+}
+function inviteDismiss(from){
+  inviteHideCard();
+  try{ if(_rtdb&&_uid&&from)_rtdb.ref('invites/'+_uid+'/'+from).remove(); }catch(_){}
+}
+function inviteAccept(from,code){
+  inviteDismiss(from);
+  if(!code)return;
+  if(_prRoomRef){ showToast('Leave your current table first'); return; }
+  joinOpenTable(code);
+}
+// Waiting room → open the online panel in invite mode.
+function prOpenInvitePanel(){
+  if(typeof startPresenceListener==='function'&&!_presListener)startPresenceListener();
+  renderOnline();
+  openOpenTables();
 }
 
 // ── Open Tables (lobby live list) ────────────────────────────────────
