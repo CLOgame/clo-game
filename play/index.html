@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-29a';
+  window.CLO_BUILD = '2026-10-29b';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -16384,6 +16384,15 @@ function claimAdFromRewards(){
 // or a seat is taken, and from prResetState(). Rules: read = any signed-in
 // user, write = only your own uid.
 let _presRef=null,_presArmed=false,_presLast='',_presPublic=false,_presRoomInfo=null;
+// 29b: HEARTBEAT. A session that dies without Firebase noticing (killed
+// during a network blip) leaves a ghost record. Every open app rewrites its
+// record every 4 minutes, and the lobby ignores anything older than 10.
+const PRES_BEAT_MS=4*60*1000, PRES_STALE_MS=10*60*1000;
+let _presBeat=null;
+function presenceStartBeat(){
+  if(_presBeat)return;
+  _presBeat=setInterval(()=>{ try{ _presLast=''; presenceUpdate(); }catch(_){} },PRES_BEAT_MS);
+}
 // 25b: the lobby cannot read /privrooms as a whole (rules grant reads per
 // room only — which is also why the old Open Tables list was always empty),
 // so a HOST's presence record carries the facts a joiner needs: public flag,
@@ -16435,6 +16444,7 @@ function presenceUpdate(){
     if(sig===_presLast)return;
     _presLast=sig;
     _presRef.set(rec).catch(e=>{ _presLast=''; console.warn('[presence] write failed',e&&e.code?e.code:e); });
+    presenceStartBeat();
   }catch(e){ console.warn('[presence] update threw',e); }
 }
 // Called when the socket comes back: the old onDisconnect was consumed when
@@ -16456,9 +16466,9 @@ function startPresenceListener(){
       if(uid===_uid)continue;
       const p=all[uid];
       if(!p||!p.name)continue;
-      // A record the server never got to remove (e.g. a crashed tab on a
-      // flaky connection) would sit forever: ignore anything 2h stale.
-      if(typeof p.at==='number'&&now-p.at>2*60*60*1000)continue;
+      // Ghost records (no disconnect signal ever arrived): the heartbeat
+      // refreshes live ones every 4 min, so anything older than 10 is dead.
+      if(typeof p.at==='number'&&now-p.at>PRES_STALE_MS)continue;
       list.push(Object.assign({uid},p));
     }
     _lastPlayers=list;
