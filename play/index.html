@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-29c';
+  window.CLO_BUILD = '2026-10-29d';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -7423,9 +7423,24 @@ window.addEventListener('pagehide',()=>{
 // ── Add to Home Screen pill (2026-10-08a) ──────────────────────────────
 // Companion to the beforeinstallprompt listener in the head. The pill shows
 // only when Chrome has handed us an install event AND the player hasn't
-// dismissed the sheet within the last 7 days. WHEN THE PLAY LISTING IS
-// PUBLIC: swap the body of promptInstall() for a window.open on the store URL
-// (and drop the _installPromptEvt gate) to send Android players to Play.
+// dismissed the sheet within the last 7 days.
+// 29d — PLAY STORE MODE (step 5 of social play). Once the Play listing is
+// public, flip PLAY_STORE_LIVE to true: Android players in a browser then
+// see a "Get the app" pill that opens the store listing instead of Chrome's
+// add-to-home-screen sheet (the PWA and the Play app are the same origin, so
+// a player who installs from Play keeps their chips). Everyone else — iOS,
+// desktop, already-installed, inside the Play app — is unchanged. For a
+// device test before the flip: localStorage.clo_store_live='1'.
+const PLAY_STORE_LIVE=false;
+function installStoreMode(){
+  let ov=null; try{ ov=localStorage.getItem('clo_store_live'); }catch(_){}
+  const live=ov==='1'?true:ov==='0'?false:PLAY_STORE_LIVE;
+  if(!live)return false;
+  if(!/Android/i.test(navigator.userAgent||''))return false;
+  if(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)return false;
+  if((document.referrer||'').indexOf('android-app://')===0)return false;   // inside the TWA
+  return true;
+}
 const INSTALL_DISMISS_KEY='clo_install_dismissed_at';
 const INSTALL_DISMISS_MS=7*24*60*60*1000;
 function refreshInstallPill(){
@@ -7434,10 +7449,20 @@ function refreshInstallPill(){
   let dismissed=0;
   try{ dismissed=parseInt(localStorage.getItem(INSTALL_DISMISS_KEY)||'0',10)||0; }catch(_){}
   const standalone=window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches;
-  const show=!!window._installPromptEvt&&!standalone&&(Date.now()-dismissed>INSTALL_DISMISS_MS);
+  const store=installStoreMode();
+  const lbl=pill.querySelector('.ip-label'); if(lbl)lbl.textContent=store?'Get the app':'Install';
+  const show=(store||!!window._installPromptEvt)&&!standalone&&(Date.now()-dismissed>INSTALL_DISMISS_MS);
   pill.classList.toggle('show',show);
 }
 async function promptInstall(){
+  if(installStoreMode()){
+    // Hand off to Play. Hide the pill for the same 7 days so it doesn't nag
+    // a player who came back to the browser instead of installing.
+    try{ localStorage.setItem(INSTALL_DISMISS_KEY,String(Date.now())); }catch(_){}
+    refreshInstallPill();
+    try{ window.open(PLAY_STORE_URL,'_blank','noopener'); }catch(_){ location.href=PLAY_STORE_URL; }
+    return;
+  }
   const evt=window._installPromptEvt;
   if(!evt){ refreshInstallPill(); return; }
   try{
