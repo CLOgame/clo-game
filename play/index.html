@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-02a';
+  window.CLO_BUILD = '2026-11-02b';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -7327,8 +7327,15 @@ window.addEventListener('load',()=>{
             // its balance wins and the cloud is healed from it.
             {
               const cached=_bootCache;
-              const cb=cached&&cached.uid===_uid&&typeof cached.balance==='number'?cached:null;
+              // 11-02b: a "newer" cache is only trusted when it is the SAME
+              // profile as the cloud one (same createdAt). A freshly minted
+              // local profile is newer by definition and must never heal the
+              // cloud down to 10K.
+              const _ck=v=>{ if(v==null)return null; if(typeof v.toMillis==='function')return String(Math.floor(v.toMillis()/1000)); if(typeof v==='object'&&typeof v.seconds==='number')return String(v.seconds); if(typeof v==='string'){ const t=Date.parse(v); return isNaN(t)?v:String(Math.floor(t/1000)); } return String(v); };
+              const sameProfile=!!(cached&&_profile&&_ck(cached.createdAt)!==null&&_ck(cached.createdAt)===_ck(_profile.createdAt));
+              const cb=cached&&cached.uid===_uid&&sameProfile&&typeof cached.balance==='number'?cached:null;
               const cloudAt=_bootCloudAt;
+              if(cached&&cached.uid===_uid&&!sameProfile)console.warn('[bal] boot: local cache is a different profile (createdAt mismatch) \u2014 cloud wins');
               if(cb&&typeof cb.balAt==='number'&&cb.balAt>cloudAt&&cb.balance!==_profile.balance){
                 console.log('[bal] boot: cloud '+(_profile.balance||0).toLocaleString()+' ('+new Date(cloudAt).toISOString()+') older than cache '+cb.balance.toLocaleString()+' ('+new Date(cb.balAt).toISOString()+') \u2192 cache');
                 _profile.balance=cb.balance; _profile.balAt=cb.balAt; _balStampVal=cb.balance; _balAt=cb.balAt;
@@ -7388,7 +7395,25 @@ window.addEventListener('load',()=>{
               setTimeout(()=>{if(stillOnBootScreen())goToLanding();},delay);
             }
           }
-        }catch(e){console.warn(e);setTimeout(()=>{if(stillOnBootScreen())goToLanding();},delay);}
+        }catch(e){
+          console.warn(e);
+          // 11-02b: the fetch failing (airplane mode, dead wifi, Firestore
+          // down) does not make this a new player. Since 18d narrowed the 4s
+          // fallback to "no signed-in user", an OFFLINE relaunch with a
+          // persisted sign-in fell through to the landing screen and minted a
+          // fresh 10K profile under the cached name. Use the cache instead.
+          let cached=null; try{ cached=loadLocalProfile(); }catch(_){}
+          if(cached&&cached.uid===_uid&&!_profile){
+            _profile=cached;
+            _isOffline=true; window._bootPath=(window._bootPath||'')+'>offline-cache';
+            _balStampVal=null; _stampBal(_profile);       // adopt the cache's stamp
+            setBalance(_profile.balance||10000,'boot:offline-cache',_profile.balAt);
+            if(needsTOS()){ setTimeout(()=>{ if(stillOnBootScreen())showTOS(()=>goToLobby()); },delay); }
+            else{ setTimeout(()=>{ if(stillOnBootScreen())goToLobby(); },delay); }
+          }else{
+            setTimeout(()=>{if(stillOnBootScreen())goToLanding();},delay);
+          }
+        }
       }else{
         window._bootPath='signing-in';
         _auth.signInAnonymously().catch(err=>{
