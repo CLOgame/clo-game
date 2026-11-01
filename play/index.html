@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-02b';
+  window.CLO_BUILD = '2026-11-02c';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -7132,6 +7132,28 @@ setTimeout(()=>{
   // claim, so bought chips only showed up on the next launch). A signed-in
   // user means Firebase is reachable: only go offline when auth never came.
   if(!_profile && !(_auth && _auth.currentUser)){ enterOfflineMode(); }
+  // 11-02c: a SIGNED-IN user with no profile yet at 4s is usually offline (the
+  // Firestore fetch takes ~10s to give up without a network) or on a slow
+  // cold start. Either way, if this uid's profile is in the local cache, boot
+  // from it instead of showing the landing screen — which minted a fresh 10K
+  // "AL" on an airplane-mode relaunch (Nov 1). A brand-new player has no
+  // cache and still lands as before. _isOffline is deliberately NOT set (18d
+  // invariant: never while signed in); if the cloud fetch later succeeds, the
+  // normal path adopts it with the stamp comparison and no screen change.
+  if(!_profile && _auth && _auth.currentUser){
+    let cached=null; try{ cached=loadLocalProfile(); }catch(_){}
+    if(cached && cached.uid===_auth.currentUser.uid){
+      _profile=cached; _uid=_auth.currentUser.uid;
+      _balStampVal=null; try{ _stampBal(_profile); }catch(_){}
+      setBalance(_profile.balance||10000,'boot:cache-4s',_profile.balAt);
+      window._bootPath=(window._bootPath||'')+'>cache-4s';
+      if(splash && (splash.classList.contains('active') || splash.style.display !== 'none')){
+        try{ if(typeof needsTOS==='function'&&needsTOS())showTOS(()=>goToLobby()); else goToLobby(); }
+        catch(e){ console.warn('[bal] cache-4s boot failed',e); goToLanding(); }
+      }
+      return;
+    }
+  }
   if(splash && (splash.classList.contains('active') || splash.style.display !== 'none')){
     console.warn('Splash fallback fired');
     goToLanding();
@@ -7405,7 +7427,7 @@ window.addEventListener('load',()=>{
           let cached=null; try{ cached=loadLocalProfile(); }catch(_){}
           if(cached&&cached.uid===_uid&&!_profile){
             _profile=cached;
-            _isOffline=true; window._bootPath=(window._bootPath||'')+'>offline-cache';
+            window._bootPath=(window._bootPath||'')+'>offline-cache';   // (no _isOffline: 18d invariant)
             _balStampVal=null; _stampBal(_profile);       // adopt the cache's stamp
             setBalance(_profile.balance||10000,'boot:offline-cache',_profile.balAt);
             if(needsTOS()){ setTimeout(()=>{ if(stillOnBootScreen())showTOS(()=>goToLobby()); },delay); }
