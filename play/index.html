@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-02e';
+  window.CLO_BUILD = '2026-11-02f';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -7290,6 +7290,26 @@ window.addEventListener('load',()=>{
         // read the flag refused with "connect to the internet" on a phone
         // that was online. A signed-in user means Firebase is reachable.
         _isOffline=false;
+        // 11-02f: if a splash timer already booted us from the cache BEFORE
+        // auth arrived (normal on a phone cold start), the lobby's online
+        // hookups ran unauthenticated and died: the presence list read was
+        // refused (rules need auth), and presenceUpdate / the invite listener
+        // bailed on a null _uid. Nothing re-ran them — a lobby stuck at
+        // "0 online", no invites (Nov 1). Re-kick them once, now that we can.
+        if(_bootNavigated&&!window._postAuthHooked){
+          window._postAuthHooked=true;
+          setTimeout(()=>{
+            try{
+              if(typeof presenceUpdate==='function')presenceUpdate();          // own record + invite listener
+              const act=document.querySelector('.screen.active');
+              if(act&&act.id==='screen-lobby'){
+                if(typeof startPresenceListener==='function')startPresenceListener();
+                if(typeof startOpenTablesListener==='function')startOpenTablesListener();
+              }
+              console.log('[bal] auth arrived after cache boot \u2014 online hookups re-armed');
+            }catch(e){ console.warn('[bal] post-auth hookup failed',e); }
+          },0);
+        }
       }else{
         _uid=null;
         _isGuest=true;
@@ -7378,6 +7398,7 @@ window.addEventListener('load',()=>{
               }
             }
             setBalance(_profile.balance||10000,'boot:cloud',_balAt);
+            try{ _refreshChipDisplays(); }catch(_){}   // 11-02f: lobby may already be drawn from the cache
             // The profile just came from Firestore: clear any offline state the
             // 4s fallback set while this fetch was still in flight.
             _isOffline=false; if(_auth&&_auth.currentUser)_uid=_auth.currentUser.uid;
