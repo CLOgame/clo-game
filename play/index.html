@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-02d';
+  window.CLO_BUILD = '2026-11-02e';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -7082,6 +7082,7 @@ let _turnTimer=null,_turnSecs=0;
 // ── Splash dismiss — always leaves after 2.5s max ─────────────────────────
 const _loadStart = Date.now();
 let _authDone = false;
+let _bootNavigated = false;   // 11-02e: a boot path has chosen a screen (NOT the same as _profile being set — ensureAvatarFields sets _profile as a side effect of merely READING the cache)
 
 // ── Splash 3D dice painter (4-5-6 Headcrack) ──────────────────────────
 (function paintSplashDice(){
@@ -7125,7 +7126,7 @@ document.getElementById('screen-splash').addEventListener('click',()=>{
 // stamp comparison without changing screen. _isOffline is set ONLY when no
 // user is signed in (18d invariant); the auth callback clears it on arrival.
 function bootFromCache(reason){
-  if(_profile)return true;
+  if(_bootNavigated)return true;
   let cached=null; try{ cached=loadLocalProfile(); }catch(_){}
   if(!cached||typeof cached.balance!=='number')return false;
   const cu=_auth&&_auth.currentUser;
@@ -7135,6 +7136,7 @@ function bootFromCache(reason){
   _balStampVal=null; try{ _stampBal(_profile); }catch(_){}
   setBalance(_profile.balance||10000,'boot:cache-'+reason,_profile.balAt);
   window._bootPath=(window._bootPath||'')+'>cache-'+reason;
+  _bootNavigated=true;
   const active=document.querySelector('.screen.active'); const id=active?(active.id||''):'';
   if(!active||id==='screen-splash'||id==='screen-landing'||id===''){
     try{ if(needsTOS())showTOS(()=>goToLobby()); else goToLobby(); }
@@ -7159,7 +7161,7 @@ setTimeout(()=>{
   // user means Firebase is reachable: only go offline when auth never came.
   // 11-02d: cache first (signed in or not), then the 18d offline fallback for
   // a device with no cache and no user, then landing only if still on splash.
-  if(!_profile) bootFromCache('4s');
+  if(!_bootNavigated) bootFromCache('4s');
   if(!_profile && !(_auth && _auth.currentUser)){ enterOfflineMode(); }
   if(splash && (splash.classList.contains('active') || splash.style.display !== 'none')){
     console.warn('Splash fallback fired');
@@ -7312,6 +7314,7 @@ window.addEventListener('load',()=>{
         try{
           const snap=await _db.collection('players').doc(_uid).get();
           if(snap.exists){
+            _bootNavigated=true;   // 11-02e
             _profile=ensureAvatarFields(snap.data());
             // 11-02a: read the cache and the cloud stamp BEFORE the mirror save
             // below overwrites the cache and stamps the profile.
@@ -7406,6 +7409,7 @@ window.addEventListener('load',()=>{
             // fresh 10K start, RECOVER their locally-cached profile and re-save
             // it under this UID so their chips/skin/stats carry over.
             const cached=loadLocalProfile();
+            _bootNavigated=true;   // 11-02e
             if(cached){
               _profile=cached;
               balance=_profile.balance||10000;
@@ -7432,10 +7436,11 @@ window.addEventListener('load',()=>{
           // persisted sign-in fell through to the landing screen and minted a
           // fresh 10K profile under the cached name. Use the cache instead.
           let cached=null; try{ cached=loadLocalProfile(); }catch(_){}
-          if(_profile){
+          if(_bootNavigated){
             // 11-02d: already booted from the cache by a splash timer — stay put.
             console.log('[bal] cloud fetch failed after cache boot; staying on cache');
           }else if(cached&&cached.uid===_uid){
+            _bootNavigated=true;   // 11-02e
             _profile=cached;
             window._bootPath=(window._bootPath||'')+'>offline-cache';   // (no _isOffline: 18d invariant)
             _balStampVal=null; _stampBal(_profile);       // adopt the cache's stamp
@@ -7443,6 +7448,7 @@ window.addEventListener('load',()=>{
             if(needsTOS()){ setTimeout(()=>{ if(stillOnBootScreen())showTOS(()=>goToLobby()); },delay); }
             else{ setTimeout(()=>{ if(stillOnBootScreen())goToLobby(); },delay); }
           }else{
+            _bootNavigated=true;   // 11-02e: genuinely nothing to boot from
             setTimeout(()=>{if(stillOnBootScreen())goToLanding();},delay);
           }
         }
@@ -7462,7 +7468,7 @@ window.addEventListener('load',()=>{
         // Anonymous sign-in is pending — DON'T set _authBooted yet, let the
         // *next* auth callback (when sign-in completes) do the real boot.
         _authBooted=false;
-        setTimeout(goToLanding,delay);
+        setTimeout(()=>{ if(!bootFromCache('noauth')) goToLanding(); },delay);   // 11-02e
       }
     });
   }catch(e){
