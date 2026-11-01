@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-01c';
+  window.CLO_BUILD = '2026-11-02a';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -6753,8 +6753,41 @@ let _isOffline=false;   // true when we booted/are running without Firebase
 // skin/stats to run with. Multiplayer still needs a live connection.
 const LOCAL_PROFILE_KEY='clo_profile_cache_v1';
 let _lastSaveOk=null;   // diagnostic: did the most recent local write verify?
+// ── BALANCE OWNERSHIP (11-02a) ─────────────────────────────────────────
+// The chip count lives in three places (memory `balance`, the Firestore
+// profile, the room seat/bankroll) and used to be reconciled by "last write
+// wins". Now every stored balance carries a stamp, `balAt` (server-ish ms):
+//   • the profile gets it at the save chokepoints below whenever the balance
+//     being saved differs from the last one stamped;
+//   • seat / bankroll writes carry it explicitly (mpNow(), so all devices
+//     agree);
+//   • boot prefers whichever of cloud vs local cache is NEWER (an offline
+//     session's chips used to be lost to an older cloud copy);
+//   • the table sync refuses a seat snapshot OLDER than what memory holds.
+// A missing stamp behaves exactly as before, so nothing regresses on data
+// written by earlier builds. setBalance() is the one door for the remote →
+// memory direction and logs every change, so the next balance bug has a trail.
+let _balAt=0;            // stamp of the balance currently in memory
+let _balStampVal=null;   // last balance value we stamped on save
+function balNow(){ try{ return mpNow(); }catch(_){ return Date.now(); } }
+function _stampBal(p){
+  if(!p||typeof p.balance!=='number')return;
+  if(_balStampVal===null&&typeof p.balAt==='number'){ _balStampVal=p.balance; _balAt=Math.max(_balAt,p.balAt); return; }
+  if(p.balance!==_balStampVal||typeof p.balAt!=='number'){
+    _balStampVal=p.balance; p.balAt=Math.max(balNow(),_balAt||0); _balAt=p.balAt;
+  }
+}
+function setBalance(n,src,at){
+  if(typeof n!=='number'||!isFinite(n)||n<0)return false;
+  const old=(typeof balance==='number')?balance:null;
+  balance=n;
+  if(typeof at==='number'&&at>_balAt)_balAt=at;
+  if(old!==n)console.log('[bal] '+src+': '+(old==null?'—':old.toLocaleString())+' \u2192 '+n.toLocaleString());
+  return true;
+}
 function saveLocalProfile(p){
   if(!p)return;
+  _stampBal(p);
   try{
     const json=JSON.stringify(p);
     localStorage.setItem(LOCAL_PROFILE_KEY,json);
@@ -6916,7 +6949,7 @@ function _stripServerOwned(p,keepCreatedAt){
   return out;
 }
 window._saveProfile=async p=>{
-  saveLocalProfile(p);                 // always keep a local mirror
+  saveLocalProfile(p);                 // always keep a local mirror (stamps balAt)
   if(!_uid||!_db)return;               // offline — local save is enough
   // If a referral claim is mid-commit, wait for it. Every caller passes
   // _profile itself, so once the claim lands this save carries the new
@@ -6978,7 +7011,7 @@ async function _doClaimReferralCredit(){
       if(owed<=0&&bought<=0)return null;
       const base=(typeof _profile.balance==='number')?_profile.balance:0;
       const newBal=base+Math.max(owed,0)+Math.max(bought,0);
-      const w={balance:newBal};
+      const w={balance:newBal,balAt:balNow()};   // 11-02a
       if(owed>0)w.pendingReferralCredit=0;
       if(bought>0){
         w.pendingPurchaseCredit=0;
@@ -6994,7 +7027,7 @@ async function _doClaimReferralCredit(){
       _profile.pendingPurchaseCredit=0;
       if(typeof claimed.purchasedTotal==='number')_profile.purchasedTotal=claimed.purchasedTotal;
       if(typeof claimed.credited==='number')_profile.referralsCredited=claimed.credited;
-      balance=claimed.newBal;
+      setBalance(claimed.newBal,'claim',balNow());   // 11-02a
       saveLocalProfile(_profile);
       _refreshChipDisplays();
       // Bought chips while seated at a live table: the seat is the source of
@@ -7019,6 +7052,7 @@ async function _doClaimReferralCredit(){
 }
 window._updateProfile=async d=>{
   if(_profile){Object.assign(_profile,d);saveLocalProfile(_profile);}  // mirror merged result locally
+  if('balance' in d&&_profile&&typeof _profile.balAt==='number')d=Object.assign({},d,{balAt:_profile.balAt});   // 11-02a
   if(!_uid||!_db)return;               // offline — local save is enough
   // Same guard as _saveProfile: never let a balance write land after a claim
   // with the pre-claim number, and never send the server-owned fields.
@@ -7250,6 +7284,11 @@ window.addEventListener('load',()=>{
           const snap=await _db.collection('players').doc(_uid).get();
           if(snap.exists){
             _profile=ensureAvatarFields(snap.data());
+            // 11-02a: read the cache and the cloud stamp BEFORE the mirror save
+            // below overwrites the cache and stamps the profile.
+            let _bootCache=null; try{ _bootCache=loadLocalProfile(); }catch(_){}
+            const _bootCloudAt=(typeof _profile.balAt==='number')?_profile.balAt:0;
+            _balStampVal=_profile.balance; _balAt=_bootCloudAt;
             saveLocalProfile(_profile);   // keep local mirror fresh for offline boots
             // Migrate stale dark avatar colors (old palette) to vivid equivalents
             const COLOR_MIGRATE={
@@ -7282,7 +7321,24 @@ window.addEventListener('load',()=>{
                 if(window._saveProfile)window._saveProfile(_profile).catch(()=>{});
               }
             }
-            balance=_profile.balance||10000;
+            // 11-02a: the cloud copy is not automatically the newest. If the
+            // local cache belongs to this same uid and carries a NEWER stamp
+            // (an offline session, or a save that never reached Firestore),
+            // its balance wins and the cloud is healed from it.
+            {
+              const cached=_bootCache;
+              const cb=cached&&cached.uid===_uid&&typeof cached.balance==='number'?cached:null;
+              const cloudAt=_bootCloudAt;
+              if(cb&&typeof cb.balAt==='number'&&cb.balAt>cloudAt&&cb.balance!==_profile.balance){
+                console.log('[bal] boot: cloud '+(_profile.balance||0).toLocaleString()+' ('+new Date(cloudAt).toISOString()+') older than cache '+cb.balance.toLocaleString()+' ('+new Date(cb.balAt).toISOString()+') \u2192 cache');
+                _profile.balance=cb.balance; _profile.balAt=cb.balAt; _balStampVal=cb.balance; _balAt=cb.balAt;
+                saveLocalProfile(_profile);
+                if(window._updateProfile)window._updateProfile({balance:cb.balance}).catch(()=>{});
+              }else{
+                _balAt=cloudAt; _balStampVal=_profile.balance;
+              }
+            }
+            setBalance(_profile.balance||10000,'boot:cloud',_balAt);
             // The profile just came from Firestore: clear any offline state the
             // 4s fallback set while this fetch was still in flight.
             _isOffline=false; if(_auth&&_auth.currentUser)_uid=_auth.currentUser.uid;
@@ -8951,7 +9007,8 @@ function prArmSeatPresence(pushBalance){
   //    arbitrarily stale. Malik hit exactly this — rebuilt his profile at 13k,
   //    rejoined, and the seat's old 1,000,000+ was synced back over it.
   if(pushBalance&&typeof balance==='number'){
-    ref.child('seats/'+seatKey+'/balance').set(balance)
+    const at=balNow(); _balAt=Math.max(_balAt,at);
+    ref.child('seats/'+seatKey).update({balance:balance,balAt:at})   // 11-02a: stamped
       .catch(e=>console.warn('[mp] rejoin balance assert failed',e));
   }
   ref.child('seats/'+seatKey+'/status').onDisconnect().set('absent');
@@ -9542,6 +9599,7 @@ function prJoinRoom(){
       avatarId:p.avatarId||'skull',
       tier:p.lastSeenTier||getStatus(p.totalEarned||0).name||'Shorty',
       balance:(typeof balance!=='undefined'?balance:10000),
+      balAt:balNow(),   // 11-02a
       joinedAt:Date.now()
     };
     for(const k in seatData){if(seatData[k]===undefined)delete seatData[k];}
@@ -11696,6 +11754,7 @@ function mpHostApplySettlement(summary,bankDelta){
   const seats=_mpRoom.seats||{};
 
   // Per-shooter balance updates
+  const settleAt=balNow();   // 11-02a: one stamp for every balance this settlement writes
   for(const uid in summary){
     const delta=summary[uid].delta;
     if(delta===0)continue;
@@ -11705,6 +11764,7 @@ function mpHostApplySettlement(summary,bankDelta){
     if(seatKey===null)continue;
     const currentBal=seats[seatKey].balance||0;
     updates['seats/'+seatKey+'/balance']=Math.max(0,currentBal+delta);
+    updates['seats/'+seatKey+'/balAt']=settleAt;   // 11-02a
   }
 
   // Bank (host) bankroll update
@@ -11714,6 +11774,7 @@ function mpHostApplySettlement(summary,bankDelta){
     showToast('Bank shortfall — please report this');
   }
   updates['bankroll']=Math.max(0,bankBefore+bankDelta);
+  updates['bankrollAt']=settleAt;   // 11-02a
 
   // Round status
   updates['round/phase']='settlement';
@@ -11868,7 +11929,7 @@ function mpRenderSettlementPhase(room,round){
       if(_profile&&!window[hostKey]){
         window[hostKey]=true;
         const newBal=(room.bankroll!=null)?room.bankroll:balance;
-        balance=newBal;
+        setBalance(newBal,'settle:bank',typeof room.bankrollAt==='number'?room.bankrollAt:undefined);   // 11-02a
         _profile.balance=newBal;
         if(bd>0){
           _profile.wins=(_profile.wins||0)+1;
@@ -12042,14 +12103,16 @@ function mpPushBalanceToSeat(){
     // Host: the purse IS the bankroll. A chip purchase or claim while hosting
     // (sweetening a broke bank) has to land in room.bankroll or the next
     // snapshot resets `balance` to the old figure. Piece 3, Oct 14 2026.
-    _mpRoomRef.child('bankroll').set(balance)
+    const at=balNow(); _balAt=Math.max(_balAt,at);
+    _mpRoomRef.update({bankroll:balance,bankrollAt:at})   // 11-02a: stamped
       .catch(e=>console.warn('[mp] bankroll push failed',e));
     return;
   }
   const seats=_mpRoom.seats||{};
   for(const k in seats){
     if(seats[k]&&seats[k].uid===_mpMyUid){
-      _mpRoomRef.child('seats/'+k+'/balance').set(balance)
+      const at=balNow(); _balAt=Math.max(_balAt,at);
+      _mpRoomRef.child('seats/'+k).update({balance:balance,balAt:at})   // 11-02a: stamped
         .catch(e=>console.warn('[mp] seat balance push failed',e));
       return;
     }
@@ -12096,8 +12159,20 @@ function mpSyncLocalBalanceFromRoom(room){
 
   const newBal=mpGetMyBalance(room);
   if(typeof newBal!=='number')return;
+  // 11-02a: a snapshot that carries a stamp OLDER than the balance already in
+  // memory is a stale copy (the exact shape of the Sep "1,000,000 over 13K"
+  // bug) — ignore it. Unstamped data (older builds) is accepted as before.
+  const isHost=(room.hostUid===_mpMyUid);
+  const snapAt=isHost?room.bankrollAt:(mySeat?mySeat.balAt:undefined);
+  // 1.5s tolerance: all stamps are server time, but a host settlement
+  // computed a beat before my own push lands should still win — only
+  // genuinely old snapshots (seconds to minutes) are refused.
+  if(typeof snapAt==='number'&&snapAt<_balAt-1500&&newBal!==balance){
+    console.warn('[bal] '+(isHost?'bankroll':'seat')+' snapshot stale ('+new Date(snapAt).toISOString()+' < '+new Date(_balAt).toISOString()+') — kept '+balance.toLocaleString()+', ignored '+newBal.toLocaleString());
+    return;
+  }
   if(typeof balance!=='undefined'&&newBal!==balance){
-    balance=newBal;
+    setBalance(newBal,isHost?'bankroll':'seat',typeof snapAt==='number'?snapAt:undefined);
     mpUpdateBalanceDisplay();
     // Persist straight through. Previously `balance` tracked the seat while
     // the profile was only written on some paths, so the two could disagree
@@ -12121,7 +12196,7 @@ function mpHostSeedSeatBalance(room){
       // We don't know remote players' balances. Default 10K starter for guests.
       // (When seat is first claimed, the joining device should write its own
       // balance; this is a safety net.)
-      _mpRoomRef.child('seats/'+k+'/balance').set(10000).catch(()=>{});
+      _mpRoomRef.child('seats/'+k).update({balance:10000,balAt:balNow()}).catch(()=>{});   // 11-02a
     }
   }
 }
@@ -12779,6 +12854,7 @@ function mpLeaveTable(skipFirebase){
             const bankrollBefore=serverRoom.bankroll||0;
             const updates={};
             updates['bankroll']=bankrollBefore+svrForfeit;
+            updates['bankrollAt']=balNow();   // 11-02a
             updates['round/bets/'+myUid+'/status']='forfeit';
             updates['round/bets/'+myUid+'/resultType']='lose';
             updates['round/bets/'+myUid+'/forfeitedAt']=Date.now();
