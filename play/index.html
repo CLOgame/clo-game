@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-10-29d';
+  window.CLO_BUILD = '2026-11-01a';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -10624,8 +10624,12 @@ function mpShowBetPanel(room,round){
   panel.appendChild(info);
 
   // STOP THE BANK chip — only when my stack covers the WHOLE bank (Piece 2).
+  // 11-01a: not after a pass — once you pass you're out until the next hand
+  // (Malik: no passing to see what everyone does, then stopping over them).
   const cap=mpBankCap(room);
-  if(cap>0&&myBalance>=cap){
+  const iPassed=!!(myBet&&myBet.status==='pass');
+  const showStop=cap>0&&myBalance>=cap&&!iPassed;
+  if(showStop){
     const stopBtn=document.createElement('button');
     stopBtn.className='mp-chip-btn bchip mp-chip-stop';
     stopBtn.innerHTML='STOP<br>$'+fmtChips(cap);
@@ -10654,7 +10658,10 @@ function mpShowBetPanel(room,round){
   // All-In chip (gold). When the bank has less open than my stack, this bets
   // what the bank can take and is labelled COVER rather than ALL IN — calling
   // it all-in while it wagers a fraction of the stack reads as a bug.
-  if(canAct&&myBalance>0&&myMax>0){
+  // 11-01a: when the whole bank is still open and STOP is showing, COVER
+  // would be the same $ and the same outcome — one button is enough, and
+  // STOP is the one that names what's happening.
+  if(canAct&&myBalance>0&&myMax>0&&!(showStop&&myMax>=cap)){
     const allInBtn=document.createElement('button');
     allInBtn.className='mp-chip-btn bchip bchip-allin';
     const capped=openExcl<myBalance;
@@ -10808,6 +10815,8 @@ async function mpStopBank(){
   const myBalance=mpGetMyBalance(_mpRoom);
   if(cap<=0){showToast('Nothing to stop');return;}
   if(myBalance<cap){showToast('You need $'+cap.toLocaleString()+' to stop the bank');return;}
+  const mine=_mpRoom.round&&_mpRoom.round.bets&&_mpRoom.round.bets[_mpMyUid];
+  if(mine&&mine.status==='pass'){showToast('You passed this hand — next one');return;}   // 11-01a
   const ok=await showConfirm(
     'Stop the bank for $'+cap.toLocaleString()+'?\n\nYou take the whole bank this hand. Every other bet on the felt is cancelled.',
     {title:'STOP THE BANK',okLabel:'Stop it'});
