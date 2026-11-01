@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-01a';
+  window.CLO_BUILD = '2026-11-01b';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -8199,6 +8199,19 @@ const STORE_CONSUMABLES=new Set(['clo_chips_10k','clo_chips_60k','clo_chips_150k
   'clo_chips_350k','clo_chips_1m','clo_chips_5m','clo_chips_15m','clo_chips_25m',
   'clo_chips_50m','clo_chips_100m','clo_free_roll_skip']);
 let _storeService=null,_storeProbe=null,_storeBusy=false,_restoreRan=false;
+// 11-01b: the busy latch used to stay on forever if any step after the Play
+// sheet never settled (Nov 1: chips landed, then the post-purchase clean-up
+// hung and that phone said "One purchase at a time" until a relaunch). Now
+// the latch carries a timestamp and a stale one is released, and every
+// network step has a ceiling so a hang becomes a logged timeout.
+let _storeBusyAt=0;
+const STORE_BUSY_STALE_MS=90*1000, STORE_STEP_MS=20*1000;
+function _storeWithin(ms,promise,label){
+  return new Promise((resolve,reject)=>{
+    const t=setTimeout(()=>reject(new Error('timeout: '+label)),ms);
+    Promise.resolve(promise).then(v=>{clearTimeout(t);resolve(v);},e=>{clearTimeout(t);reject(e);});
+  });
+}
 
 // Resolves to the DigitalGoodsService inside the Play app, null anywhere else.
 // Probed once and cached; the browser API simply doesn't exist outside a TWA.
@@ -8289,7 +8302,12 @@ async function _storeApplyGrant(result){
   }
 }
 async function storeBuy(productId){
-  if(_storeBusy){ showToast('One purchase at a time 🙂'); return {ok:false,reason:'busy'}; }
+  if(_storeBusy){
+    if(Date.now()-_storeBusyAt>STORE_BUSY_STALE_MS){
+      console.warn('[billing] releasing a stale busy latch ('+Math.round((Date.now()-_storeBusyAt)/1000)+'s)');
+      _storeBusy=false;
+    }else{ showToast('One purchase at a time 🙂'); return {ok:false,reason:'busy'}; }
+  }
   const service=await storeReady();
   if(!service)return {ok:false,reason:'nostore'};
   if(!_uid){ showToast('Signing in…'); await _storeAwaitAuth(6000); }
@@ -8300,7 +8318,7 @@ async function storeBuy(productId){
     showToast('Connect to the internet to buy chips 📶 ('+diag+')',5000);
     return {ok:false,reason:why};
   }
-  _storeBusy=true;
+  _storeBusy=true; _storeBusyAt=Date.now();
   let pr=null,resp=null;
   try{
     // The amount here is ignored by Play (it uses the console price); the
@@ -8312,7 +8330,7 @@ async function storeBuy(productId){
     const token=resp&&resp.details&&resp.details.purchaseToken;
     if(!token)throw new Error('no purchaseToken in response');
     let result;
-    try{ result=await _storeVerify(productId,token); }
+    try{ result=await _storeWithin(STORE_STEP_MS,_storeVerify(productId,token),'verify'); }
     catch(e){
       // Network blip between Play and our function: the purchase is real and
       // Play still holds it. Leave it un-consumed; restorePurchases() will
@@ -8331,8 +8349,13 @@ async function storeBuy(productId){
       showToast(result.reason==='pending'?'Payment pending — chips arrive once it clears ⏳':'Purchase could not be verified');
       return result;
     }
-    await _storeFinish(service,productId,token,resp);
-    await _storeApplyGrant(result);
+    // Chips are already credited server-side at this point. Neither clean-up
+    // step may hold the latch hostage: a timeout here is logged and the boot
+    // restore sweep / next forced claim finishes the job.
+    try{ await _storeWithin(STORE_STEP_MS,_storeFinish(service,productId,token,resp),'finish'); }
+    catch(e){ console.warn('[billing] finish step:',e&&e.message); }
+    try{ await _storeWithin(STORE_STEP_MS,_storeApplyGrant(result),'grant'); }
+    catch(e){ console.warn('[billing] grant step:',e&&e.message); try{ _refreshChipDisplays&&_refreshChipDisplays(); }catch(_){} }
     console.log('[billing] purchase ok',productId,result.already?'(already credited)':'');
     return result;
   }catch(e){
