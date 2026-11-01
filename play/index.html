@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-01b';
+  window.CLO_BUILD = '2026-11-01c';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -2386,6 +2386,7 @@ html,body{
   flex-shrink:0;
 }
 .mp-buy-btn:active{transform:translateY(1px);}
+.mp-invite-btn{background:linear-gradient(160deg,#6fa9ff 0%,#2f6fd6 60%,#1e4ea0 100%);color:#fff;border-color:#163a78;box-shadow:0 2px 0 #0f2a5a,0 3px 8px rgba(0,0,0,.45);font-size:.95rem;}
 
 /* Seat strip — bank + shooters as horizontal pills */
 .mp-seat-strip{
@@ -6120,6 +6121,9 @@ html,body{
          swaps screens; the seat and room listener stay live, and the purchase
          is pushed into the seat (or the host's bankroll) on the way back. -->
     <button class="mp-buy-btn" onclick="goToChipShop('mp-game')" title="Buy chips — your seat is kept">+</button>
+    <!-- 11-01c: host can call players to an open seat mid-game (same panel
+         as the waiting room's Invite Players). Shown by mpRenderSeats. -->
+    <button class="mp-buy-btn mp-invite-btn" id="mp-invite-btn" onclick="prOpenInvitePanel()" title="Invite a player to the open seat" style="display:none;">👥</button>
   </div>
 
   <!-- HUD row wrapper. On phone landscape the seat pills and the BANK-vs-YOU
@@ -9495,11 +9499,17 @@ function prJoinRoom(){
       prEnterWaitingRoom();
       return;
     }
-    if(room.status!=='waiting'){
+    // 11-01c: a table that is PLAYING still takes new players into an open
+    // seat — they sit out the hand in progress and are dealt in from the
+    // next round (same hand-off the rejoin path above has used since Sep 17:
+    // waiting room → listener sees 'playing' → mpEnterTable). Only a closed
+    // table is refused.
+    if(room.status!=='waiting'&&room.status!=='playing'){
       if(btn){btn.disabled=false;btn.textContent='🎟️ Join Table';}
-      showAlert('That table has already started or is closed.\n\nAsk the host to create a new table.');
+      showAlert('That table has closed.\n\nAsk the host to create a new table.');
       return;
     }
+    const _joiningLive=(room.status==='playing');
     const seats=room.seats||{};
     const taken=Object.values(seats).filter(s=>s&&s.uid).length;
     if(taken>=PR_MAX_SEATS){
@@ -9559,6 +9569,7 @@ function prJoinRoom(){
       presenceUpdate();          // 25a: "seated at <code>"
       prArmSeatPresence();
       if(btn){btn.disabled=false;btn.textContent='🎟️ Join Table';}
+      if(_joiningLive)showToast('You\u2019re in \u2014 you\u2019ll be dealt in from the next round',3500);   // 11-01c
       prEnterWaitingRoom();
     }).catch(err=>{
       if(btn){btn.disabled=false;btn.textContent='🎟️ Join Table';}
@@ -10195,6 +10206,12 @@ function mpRenderSeats(room){
 
   // Shooters
   const seats=room.seats||{};
+  // 11-01c: host's invite button lives while there is a seat to fill.
+  try{
+    const ib=document.getElementById('mp-invite-btn');
+    if(ib){ let occ=0; for(const k in seats){ if(seats[k]&&seats[k].uid)occ++; }
+      ib.style.display=(_mpIsHost&&room.status==='playing'&&occ<PR_MAX_SEATS)?'':'none'; }
+  }catch(_){}
   for(let i=0;i<PR_MAX_SEATS;i++){
     const s=seats[i];
     if(!s||!s.uid)continue;
@@ -16541,7 +16558,7 @@ function presenceState(){
       st.seats=n; st.max=PR_MAX_SEATS;
       st.bank=room?mpBankCap(room):Number(src.bank||0);
       st.minBet=room?mpMinBet(room):Number(src.minBet||0);
-      st.open=!!(room?room.status==='waiting':true);
+      st.open=room?(room.status!=='closed'&&n<PR_MAX_SEATS):true;   // 11-01c: playing tables take joiners too
     }
     return st;
   }
@@ -16711,9 +16728,16 @@ let _invitesSent={};          // targetUid -> exp (ms, server time)
 let _inviteLastAt=0;
 let _invListener=null,_invRef=null,_invShownKey=null,_invTimer=null;
 function inviteCanSendNow(){
-  // Only from a table that is still waiting for players.
+  // From a table that is still waiting for players — or, 11-01c, from the
+  // HOST's seat mid-game while a seat is open (the reaper frees seats; this
+  // is how they get refilled without closing the table).
   if(!_prRoomRef||!_prRoomCode)return false;
-  if(_mpRoom&&_mpRoom.status&&_mpRoom.status!=='waiting')return false;
+  const room=_mpRoom||_prLastRoom;
+  if(room&&room.status&&room.status!=='waiting'){
+    if(room.status!=='playing'||!_prIsHost)return false;
+    const seats=room.seats||{}; let occ=0; for(const k in seats){ if(seats[k]&&seats[k].uid)occ++; }
+    if(occ>=PR_MAX_SEATS)return false;
+  }
   return true;
 }
 function invitePendingTo(uid){
@@ -16964,6 +16988,11 @@ function renderOpenTables_legacy(rooms){
 // the code into the input and calling the same handler.
 function joinOpenTable(code){
   if(!code)return;
+  // 11-01c: the invite panel now opens from inside a game, where other hosts'
+  // JOIN rows are visible. One table at a time.
+  if(_prRoomRef&&String(_prRoomCode||'').toUpperCase()!==String(code).toUpperCase()){
+    showToast('Leave your table first'); return;
+  }
   // Navigate to private room screen first if we're not already there.
   // Then drop the code in and trigger the standard join flow.
   goToPrivateRoom&&goToPrivateRoom();
