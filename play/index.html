@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-02f';
+  window.CLO_BUILD = '2026-11-05a';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -1478,6 +1478,13 @@ html,body{
   color:#fff;
   display:flex;align-items:center;gap:6px;
 }
+.cs-guest-note{
+  display:none;margin:-8px auto 16px;max-width:620px;padding:9px 14px;border-radius:12px;
+  background:rgba(30,127,200,.14);border:1px solid rgba(30,127,200,.45);color:#cfe6ff;
+  font-size:.85rem;line-height:1.35;text-align:center;cursor:pointer;
+}
+.cs-guest-note b{color:#fff;}
+.cs-guest-note .cgn-bonus{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:8px;background:#1f9a4a;color:#fff;font-weight:700;font-size:.78rem;}
 .cs-subtitle{
   color:rgba(255,255,255,0.55);
   font-size:0.95rem;
@@ -5953,6 +5960,10 @@ html,body{
   </div>
 
   <div class="cs-subtitle">Tap a pack to buy</div>
+  <!-- 11-05a: guests buying chips are tied to this phone's anonymous account.
+       Consumed Play purchases cannot be restored onto a new uid, so a wiped or
+       replaced phone loses them. Nudge the link before money changes hands. -->
+  <div class="cs-guest-note" id="cs-guest-note" onclick="loginGoogle()">🔒 Guest account — chips bought here stay on <b>this phone</b>. <b>Link Google</b> to keep them on any device.<span class="cgn-bonus">+$2K</span></div>
 
   <div class="cs-grid" id="cs-grid"></div>
 
@@ -8005,6 +8016,7 @@ let _chipShopReturn='landing';   // where to go back to after the chip shop
 function goToChipShop(returnTo){
   // Remember where the player came from so "Back" returns there
   if(returnTo)_chipShopReturn=returnTo;
+  try{ const gn=document.getElementById('cs-guest-note'); if(gn)gn.style.display=linkNudgeEligible()?'block':'none'; }catch(_){}   // 11-05a
   const grid=document.getElementById('cs-grid');
   if(!grid)return;
   grid.innerHTML='';
@@ -8176,6 +8188,39 @@ function showConfirm(msg,opts){
   });
 }
 
+// ── "Save your account" nudge (11-05a) ───────────────────────────────────
+// A guest's chips live under an anonymous uid on ONE device; a wipe or a new
+// phone loses them and consumed Play purchases cannot be re-granted to a new
+// uid. After a purchase (real or preview) a guest gets one card asking them
+// to link Google — at most once per 24h, recorded on the profile
+// (linkNudgeAt) so it travels with the account. Linking keeps the uid, the
+// profile and the chips (loginGoogle links the anonymous user in place).
+const LINK_NUDGE_EVERY_MS=24*60*60*1000;
+let _linkNudgePending=false;
+function linkNudgeEligible(){
+  return !!(_profile&&_isGuest&&!_profile.googleLinked&&_auth&&_auth.currentUser&&navigator.onLine!==false);
+}
+function maybeShowLinkNudge(reason){
+  try{
+    if(!linkNudgeEligible()||_linkNudgePending)return;
+    const last=(typeof _profile.linkNudgeAt==='number')?_profile.linkNudgeAt:0;
+    if(Date.now()-last<LINK_NUDGE_EVERY_MS)return;
+    _linkNudgePending=true;
+    setTimeout(async()=>{
+      try{
+        if(!linkNudgeEligible()){ _linkNudgePending=false; return; }
+        _profile.linkNudgeAt=Date.now();
+        if(window._updateProfile)window._updateProfile({linkNudgeAt:_profile.linkNudgeAt}).catch(()=>{});
+        const ok=await showConfirm(
+          'Your chips are saved to this phone only.\n\nLink your Google account and they follow you to any device \u2014 plus a $2,000 bonus. Nothing else changes.',
+          {title:'SAVE YOUR CHIPS',okLabel:'Link Google',cancelLabel:'Later'});
+        _linkNudgePending=false;
+        if(ok)loginGoogle();
+      }catch(e){ _linkNudgePending=false; console.warn('[nudge]',e); }
+    },1800);   // after the purchase toast + sound
+  }catch(e){ _linkNudgePending=false; }
+}
+
 // ── Store-ready purchase plumbing ───────────────────────────────────────
 // Single grant point for every chip purchase. When the app is wrapped for
 // Google Play / Apple App Store, the ONLY change is: buyChips() calls the
@@ -8215,6 +8260,7 @@ function grantChipPurchase(packId){
   awardXP('chipbuy');
   showToast(`+${fmtChips(t.chips)} chips! 🪙`);
   if(typeof soundWin==='function')soundWin();
+  maybeShowLinkNudge('purchase');   // 11-05a
   return true;
 }
 
@@ -8501,6 +8547,7 @@ async function storeBuy(productId){
     try{ await _storeWithin(STORE_STEP_MS,_storeApplyGrant(result),'grant'); }
     catch(e){ console.warn('[billing] grant step:',e&&e.message); try{ _refreshChipDisplays&&_refreshChipDisplays(); }catch(_){} }
     console.log('[billing] purchase ok',productId,result.already?'(already credited)':'');
+    maybeShowLinkNudge('purchase');   // 11-05a
     return result;
   }catch(e){
     // AbortError = the player closed the Play sheet. Anything else is logged.
