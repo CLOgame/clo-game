@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-05d';
+  window.CLO_BUILD = '2026-11-05e';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -1485,6 +1485,7 @@ html,body{
 }
 .cs-guest-note b{color:#fff;}
 .cs-guest-note .cgn-bonus{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:8px;background:#1f9a4a;color:#fff;font-weight:700;font-size:.78rem;}
+.cs-guest-note .cgn-tail{white-space:nowrap;}   /* 11-05e: the badge wraps WITH its last words, never alone on a line */
 .cs-subtitle{
   color:rgba(255,255,255,0.55);
   font-size:0.95rem;
@@ -5963,7 +5964,7 @@ html,body{
   <!-- 11-05a: guests buying chips are tied to this phone's anonymous account.
        Consumed Play purchases cannot be restored onto a new uid, so a wiped or
        replaced phone loses them. Nudge the link before money changes hands. -->
-  <div class="cs-guest-note" id="cs-guest-note" onclick="loginGoogle()">🔒 Guest account — chips bought here stay on <b>this phone</b>. <b>Link Google</b> to keep them on any device.<span class="cgn-bonus">+$2K</span></div>
+  <div class="cs-guest-note" id="cs-guest-note" onclick="loginGoogle()">🔒 Guest account — chips bought here stay on <b>this phone</b>. <b>Link Google</b> to keep them on <span class="cgn-tail">any device.<span class="cgn-bonus">+$2K</span></span></div>
 
   <div class="cs-grid" id="cs-grid"></div>
 
@@ -10687,8 +10688,12 @@ function mpHostWatchdogTick(){
   const now=mpNow();   // deadlines are in server time (18b)
   // Don't hammer: one rescue attempt every 3s at most.
   if(now-_mpWatchLastAct<3000)return;
-  // GRACE: 3s past the deadline, so the shooter's own device gets first shot.
-  if(r.phase==='player-rolls'&&r.shooterDeadline&&now>r.shooterDeadline+3000){
+  // GRACE: 4.5s past the deadline, so the shooter's own device gets first
+  // shot AND the normal 3.4s pip-reading hold (mpHostCheckShooterAdvance)
+  // finishes before the watchdog steps in. At 3s it beat the hold on every
+  // force-roll ("shooter resolved but round stalled" on a round that
+  // wasn't), cutting the dice short by ~0.4s. 11-05e.
+  if(r.phase==='player-rolls'&&r.shooterDeadline&&now>r.shooterDeadline+4500){
     const q=r.shooterQueue||[];
     const uid=q[r.currentShooterIdx||0];
     if(uid&&uid!==_mpMyUid){
