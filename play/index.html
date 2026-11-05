@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-05e';
+  window.CLO_BUILD = '2026-11-05f';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -11381,7 +11381,14 @@ function mpRenderPlayerRollsPhase(room,round){
   const pt=(round.bankHand||'').replace('Point-','');
   const myBet=(round.bets||{})[_mpMyUid];
   const currentBet=(round.bets||{})[currentUid];
-  const currentShaking=!!(currentBet&&currentBet.shooting);
+  // 11-05f: a bet that already carries a result is NEVER shaking, whatever
+  // the flag says. At the buzzer the shooter's own auto-roll and the host's
+  // force-roll fire together; since Stage 1 the force-roll (server, no
+  // reveal delay) lands first and the phone's shooting:true arrived on top
+  // of the finished result — every device cleared the stage and played the
+  // shake over dice that had already landed (sound, no dice, then a second
+  // throw when the host advanced).
+  const currentShaking=!!(currentBet&&currentBet.shooting&&!currentBet.dice&&!currentBet.resultType);
 
   // Show shaking dice for the current shooter, OR the most-recent completed
   // shooter's result. Once a new shooter starts, their shake replaces the
@@ -11465,7 +11472,10 @@ function mpStartShooterTimer(round){
       const bets=_mpRoom.round.bets||{};
       const cur=bets[currentUid];
       if(cur&&cur.shooting&&!cur.dice&&cur.rolledAt){
-        if(Date.now()-cur.rolledAt>5000){
+        // 11-05f: one attempt per 3s — the server refuses a force-roll before
+        // the deadline unless the shake is 5s+ old, and this tick runs 4×/s.
+        if(Date.now()-cur.rolledAt>5000&&Date.now()-(window._mpStuckForceAt||0)>3000){
+          window._mpStuckForceAt=Date.now();
           console.warn('[shooter stuck] force-rolling',currentUid,'after 5s stuck shake');
           mpHostForceRollFor(currentUid);
         }
@@ -11482,7 +11492,7 @@ function mpStartShooterTimer(round){
       const resolved=!!(cb&&(cb.dice||cb.resultType));
       if(resolved)return;
       if(currentUid===_mpMyUid){
-        mpPlayerRoll();
+        mpPlayerRoll({auto:true});   // 11-05f: no shake write at the buzzer
       }else if(_mpIsHost){
         mpHostForceRollFor(currentUid);
       }
@@ -11492,8 +11502,12 @@ function mpStartShooterTimer(round){
   _mpShooterTimerId=setInterval(tick,250);
 }
 
-// Current shooter rolls their dice
-function mpPlayerRoll(){
+// Current shooter rolls their dice. opts.auto = the clock ran out and this
+// device is rolling for itself: skip the shake write and ask the server
+// directly (the host is force-rolling at the same instant; whichever call
+// lands first wins, the other gets already-exists). 11-05f.
+function mpPlayerRoll(opts){
+  const auto=!!(opts&&opts.auto);
   if(!_mpRoomRef||!_mpMyUid||!_mpRoom)return;
   const round=_mpRoom.round;
   if(!round||round.phase!=='player-rolls')return;
@@ -11517,10 +11531,11 @@ function mpPlayerRoll(){
   // ours — write {shooting:true} so every client renders the shake — but the
   // reveal (dice/hand/resultType) is written by rollDice after its own 1.2s
   // delay. The rules refuse those fields from any client.
-  _mpRoomRef.child('round/bets/'+_mpMyUid).update({
+  const shake=auto?Promise.resolve():_mpRoomRef.child('round/bets/'+_mpMyUid).update({
     shooting:true,
     rolledAt:Date.now()
-  }).then(()=>_mpServerRoll({op:'shooter'}))
+  });
+  shake.then(()=>_mpServerRoll({op:'shooter'}))
     .then(res=>{ _mpRollInFlight=false; console.log('[dice] server roll',res&&res.dice,res&&res.resultType); })
     .catch(err=>{
       _mpRollInFlight=false;
