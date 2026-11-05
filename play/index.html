@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-05a';
+  window.CLO_BUILD = '2026-11-05b';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -11536,45 +11536,6 @@ function mpHostForceRollFor(uid){
   }).catch(err=>console.error('Force roll write failed',err));
 }
 
-// Roll dice until we get a final (non-reroll) outcome
-function mpResolveRollUntilDecided(){
-  // A no-pair (reroll) comes up 120/216 = 56% of the time, so TEN in a row
-  // is about 1 in 360 hands — the old cap of 10 fired at real tables, and
-  // its placeholder was dice [1,1,1] labelled 'C-LO': the felt showed Trips
-  // while the log said C-LO (seen Oct 14 2026). 500 tries is 0.556^500 ≈ 0.
-  for(let safety=0;safety<500;safety++){
-    const dice=[rollDie(),rollDie(),rollDie()];
-    const hand=evalHand(dice);
-    if(hand.type!=='reroll'){
-      return {dice:dice, label:(hand.type==='point'?'Point-'+hand.point:hand.label), point:hand.point||null, type:hand.type};
-    }
-  }
-  // Unreachable in practice; if it ever happens, at least be self-consistent.
-  const dice=[4,5,6], hand=evalHand(dice);
-  return {dice:dice, label:hand.label||'C-LO', point:null, type:hand.type||'win'};
-}
-
-// Compare a shooter's roll to bank's point
-// Returns: 'win' (player beats bank), 'lose' (bank beats player), 'push'
-function mpCompareToBankPoint(roll,round){
-  const bankPt=parseInt((round.bankHand||'').replace('Point-',''),10);
-  if(roll.type==='win'){
-    // Trips / Headcrack / C-LO — player wins
-    return 'win';
-  }
-  if(roll.type==='lose'){
-    // Ace — player loses
-    return 'lose';
-  }
-  if(roll.type==='point'){
-    if(roll.point>bankPt)return 'win';
-    if(roll.point<bankPt)return 'lose';
-    return 'push';  // tie
-  }
-  // Defensive fallback
-  return 'push';
-}
-
 // Advance to the next shooter (or settlement if queue done). Called by both
 // host and shooter — Firebase last-write-wins makes this safe.
 function mpHostAdvanceShooter(){
@@ -12400,25 +12361,7 @@ function mpHostRollBank(){
   }
   // Roll honest dice — NO dampeners in multiplayer (human-vs-human is fair)
   const vals=[rollDie(),rollDie(),rollDie()];
-  const hand=evalHand(vals);
-
-  // Map evalHand result to our resultType
-  let resultType, handLabel;
-  if(hand.type==='reroll'){
-    resultType='reroll';
-    handLabel='No Pair';
-  }else if(hand.type==='win'){
-    // Bank wins (instant-win hand) → resultType='win'
-    resultType='win';
-    handLabel=hand.label;
-  }else if(hand.type==='lose'){
-    // Bank loses (Ace) → resultType='lose'
-    resultType='lose';
-    handLabel=hand.label;
-  }else{
-    resultType='point';
-    handLabel='Point-'+hand.point;
-  }
+  const {resultType,handLabel}=mpBankHandFromDice(vals);   // shared rulebook (Stage 0)
 
   // First write phase=bank-rolling so everyone sees the shake animation,
   // then write the result a moment later. This makes the roll feel "live"
@@ -14688,8 +14631,17 @@ function stopTurnRing(){
 }
 
 // ── Game logic ─────────────────────────────────────────────────────────────
+// === CLO RULES BEGIN ===
+// SHARED RULEBOOK (Stage 0 of server-side settlement, Nov 5 2026).
+// Everything between these markers is PURE: no DOM, no Firebase, no page
+// globals. `functions/extract-rules.js` copies this exact block into
+// functions/clo-rules.js so the Cloud Functions roll and judge dice with the
+// same code the page does. Edit the rules HERE ONLY and re-run the extractor
+// before `firebase deploy`. The harness (rules_test.js) loads the extracted
+// module and checks it against an independent truth table.
 function rollDie(){
-  if(window.crypto&&window.crypto.getRandomValues){const lim=4294967296-(4294967296%6);const a=new Uint32Array(1);do{window.crypto.getRandomValues(a);}while(a[0]>=lim);return(a[0]%6)+1;}
+  const c=(typeof globalThis!=='undefined'&&globalThis.crypto&&globalThis.crypto.getRandomValues)?globalThis.crypto:null;
+  if(c){const lim=4294967296-(4294967296%6);const a=new Uint32Array(1);do{c.getRandomValues(a);}while(a[0]>=lim);return(a[0]%6)+1;}
   return Math.floor(Math.random()*6)+1;
 }
 function evalHand(d){
@@ -14707,6 +14659,56 @@ function evalHand(d){
   if(s[0]===1&&s[1]===2&&s[2]===3)return{type:'lose',point:null,label:'Ace!'};
   return{type:'reroll',point:null,label:'No point'};
 }
+// The bank's throw, as the room stores it: {resultType, handLabel}. A no-pair
+// is a 'reroll' (the bank throws again); instant hands decide; a pair sets the
+// point the shooters must beat. Lifted verbatim out of mpHostRollBank.
+function mpBankHandFromDice(vals){
+  const hand=evalHand(vals);
+  if(hand.type==='reroll')return {resultType:'reroll',handLabel:'No Pair'};
+  if(hand.type==='win')return {resultType:'win',handLabel:hand.label};
+  if(hand.type==='lose')return {resultType:'lose',handLabel:hand.label};
+  return {resultType:'point',handLabel:'Point-'+hand.point};
+}
+// Roll dice until we get a final (non-reroll) outcome. `rng` lets the server
+// (or a test) supply its own die; defaults to rollDie.
+function mpResolveRollUntilDecided(rng){
+  const die=(typeof rng==='function')?rng:rollDie;
+  // A no-pair (reroll) comes up 108/216 = 50% of the time, so TEN in a row
+  // is about 1 in 1,000 hands — the old cap of 10 fired at real tables, and
+  // its placeholder was dice [1,1,1] labelled 'C-LO': the felt showed Trips
+  // while the log said C-LO (seen Oct 14 2026). 500 tries is 0.556^500 ≈ 0.
+  for(let safety=0;safety<500;safety++){
+    const dice=[die(),die(),die()];
+    const hand=evalHand(dice);
+    if(hand.type!=='reroll'){
+      return {dice:dice, label:(hand.type==='point'?'Point-'+hand.point:hand.label), point:hand.point||null, type:hand.type};
+    }
+  }
+  // Unreachable in practice; if it ever happens, at least be self-consistent.
+  const dice=[4,5,6], hand=evalHand(dice);
+  return {dice:dice, label:hand.label||'C-LO', point:null, type:hand.type||'win'};
+}
+// Compare a shooter's roll to bank's point
+// Returns: 'win' (player beats bank), 'lose' (bank beats player), 'push'
+function mpCompareToBankPoint(roll,round){
+  const bankPt=parseInt((round.bankHand||'').replace('Point-',''),10);
+  if(roll.type==='win'){
+    // Trips / Headcrack / C-LO — player wins
+    return 'win';
+  }
+  if(roll.type==='lose'){
+    // Ace — player loses
+    return 'lose';
+  }
+  if(roll.type==='point'){
+    if(roll.point>bankPt)return 'win';
+    if(roll.point<bankPt)return 'lose';
+    return 'push';  // tie
+  }
+  // Defensive fallback
+  return 'push';
+}
+// === CLO RULES END ===
 
 // ══════════════════════════════════════════════════════════════════════
 // ── 3D Dice Engine (CSS transforms — true cubes) ─────────────────────
