@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-05c';
+  window.CLO_BUILD = '2026-11-05d';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -9991,9 +9991,37 @@ let _mpRoom=null;          // last-known room snapshot
 let _mpIsHost=false;       // is this device the host (the Bank)?
 let _mpMyUid=null;         // shortcut to this device's uid
 
+// ── Per-table one-shot latches (11-05d) ─────────────────────────────────
+// Every "do this once per round" guard in this module keys on round.number
+// (sometimes round.number + uid). Round numbers restart at 1 on every new
+// table, so a host who left a table and opened another WITHOUT reloading the
+// page carried the old table's latches into the new one. With the same seat
+// order, mpHostAdvanceTurn saw key "1:<2nd seat>" as already written and
+// never moved the turn pointer, and mpHostFinalizeBetting saw round 1 as
+// already locked and never locked it — round 1 froze on "<1st seat>'s turn
+// to bet" even after everyone had acted (Nov 5, 2:07am, table SQY7B). The
+// same leak silently skipped the lock-note toast, the STOPPED/BUSTED flashes
+// and the per-round win/loss count for any round number the previous table
+// had reached. Reset every latch on the way INTO a table; mpEnterTable is
+// only ever called for a fresh table (host start, or a shooter's handoff).
+function mpResetTableLatches(){
+  _mpTurnWriteKey=null; _mpTurnTimeoutKey=null; _mpFinalizedRound=null;
+  _mpLockNoteKey=null; _mpStopCalloutKey=null; _mpBustCalloutKey=null;
+  _mpLastPhaseKey=null; _mpLastSoundKey=null; _mpPlayedSoundKeys.clear();
+  _mpLastBankDiceKey=null; _mpLastShooterDiceKey=null;
+  _mpBankSettled=false; _mpShooterSettled=false; _mpRollInFlight=false;
+  _mpBustShown=false; _mpBrokeShown=false; _mpInitRoundAt=0;
+  window._mpForceKey=null;
+  if(_mpShooterTimerId){clearInterval(_mpShooterTimerId);_mpShooterTimerId=null;}
+  _mpShooterTimerKey=null;
+  // Per-round stats gates live on window as 'mp-counted-<round>'.
+  Object.keys(window).filter(k=>k.indexOf('mp-counted-')===0).forEach(k=>{try{delete window[k];}catch(_){}});
+}
+
 // Called by prStartGame() when the host starts the game.
 // Both host and shooters arrive here. The host initializes the first round.
 function mpEnterTable(roomRef,isHost){
+  mpResetTableLatches();   // 11-05d: a fresh table starts with no leftovers
   // Reset the per-session XP counter for the "2x your XP" leave-table offer.
   resetSessionXP();
   _mpRoomRef=roomRef;
