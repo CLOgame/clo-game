@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-05b';
+  window.CLO_BUILD = '2026-11-05c';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -8449,6 +8449,16 @@ function _storeFn(){
   if(!window.firebase||!firebase.functions)throw new Error('functions SDK missing');
   return firebase.functions().httpsCallable('verifyPurchase');
 }
+// ── Server dice (Stage 1, 11-05c) ────────────────────────────────────────
+// Every multiplayer throw is made by the rollDice Cloud Function; the page
+// only triggers the shake and animates what the server writes. The RTDB rules
+// refuse client writes to the result fields, so this is the ONLY way dice
+// get into a room now.
+function _mpServerRoll(payload){
+  if(!window.firebase||!firebase.functions)return Promise.reject(new Error('functions SDK missing'));
+  const code=(_mpRoom&&_mpRoom.code)||_prRoomCode;
+  return firebase.functions().httpsCallable('rollDice')(Object.assign({code:String(code||'')},payload)).then(r=>r&&r.data);
+}
 // Ask the server to check a token with Google and credit the reward.
 // Returns the function's result object ({ok, already, grant, chips, ...}).
 async function _storeVerify(productId,purchaseToken){
@@ -9591,6 +9601,7 @@ function prCreateRoom(){
     stake:Number(prEffectiveStake()||balance||PR_HOST_BANKROLL),
     minBet:Number(_prMinBetChoice||0),
     build:String(window.CLO_BUILD||''),   // 18a: lets joiners spot a stale app
+    serverDice:true,                      // 11-05c: dice + forfeits come from rollDice
     public:!!isPublic,
     status:'waiting',
     createdAt:Date.now(),
@@ -11469,33 +11480,25 @@ function mpPlayerRoll(){
   if(_mpRollInFlight)return;
   _mpRollInFlight=true;
 
-  // Generate the roll up-front (deterministic — what we'll commit at the end)
-  const final=mpResolveRollUntilDecided();
-  const resultType=mpCompareToBankPoint(final,round);
-
-  // Two-step write so all clients see a shake animation BEFORE the result:
-  //   Step 1: write {shooting:true} → every client renders shaking dice
-  //   Step 2 (1.2s later): write the actual dice/hand/resultType → reveal
-  // This mirrors how the bank roll works (phase='bank-rolling' then 'bank-result').
+  // Stage 1 (11-05c): the dice are thrown by the SERVER. Step 1 is still
+  // ours — write {shooting:true} so every client renders the shake — but the
+  // reveal (dice/hand/resultType) is written by rollDice after its own 1.2s
+  // delay. The rules refuse those fields from any client.
   _mpRoomRef.child('round/bets/'+_mpMyUid).update({
     shooting:true,
-    // null any stale fields from a previous roll on this uid
-    dice:null,
-    hand:null,
-    resultType:null,
     rolledAt:Date.now()
-  }).then(()=>{
-    setTimeout(()=>{
-      _mpRoomRef.child('round/bets/'+_mpMyUid).update({
-        shooting:false,
-        dice:final.dice,
-        hand:final.label,
-        resultType:resultType,
-        rolledAt:Date.now()
-      }).catch(err=>console.error('Player roll reveal failed',err))
-        .then(()=>{_mpRollInFlight=false;});
-    },1200);
-  }).catch(err=>{_mpRollInFlight=false;console.error('Player roll shake failed',err);});
+  }).then(()=>_mpServerRoll({op:'shooter'}))
+    .then(res=>{ _mpRollInFlight=false; console.log('[dice] server roll',res&&res.dice,res&&res.resultType); })
+    .catch(err=>{
+      _mpRollInFlight=false;
+      const code=err&&err.code?String(err.code):'';
+      console.error('Player roll failed',code,err&&err.message);
+      // 'already-exists' = our result already landed (double tap / retry) — fine.
+      if(!/already-exists/.test(code)){
+        _mpRoomRef.child('round/bets/'+_mpMyUid+'/shooting').set(false).catch(()=>{});
+        showToast('Roll didn\u2019t go through \u2014 tap ROLL again');
+      }
+    });
 }
 
 // Host force-rolls for a player whose timer expired (offline / AFK / stuck).
@@ -11521,19 +11524,15 @@ function mpHostForceRollFor(uid){
   // A bet that already has a result is DONE. Never roll it twice.
   const cur=(round.bets||{})[uid];
   if(cur&&(cur.dice||cur.resultType))return;
-  const final=mpResolveRollUntilDecided();
-  const resultType=mpCompareToBankPoint(final,round);
-  // Single write — no shake animation for force-rolls. Players who got
-  // force-rolled were AFK/disconnected so a shake animation is wasted; what
-  // matters is unsticking the round.
-  _mpRoomRef.child('round/bets/'+uid).update({
-    shooting:false,
-    dice:final.dice,
-    hand:final.label,
-    resultType:resultType,
-    forced:true,
-    rolledAt:Date.now()
-  }).catch(err=>console.error('Force roll write failed',err));
+  // Stage 1 (11-05c): the server throws, after checking the deadline on ITS
+  // clock. No shake for a force-roll — the player is AFK; what matters is
+  // unsticking the round. One call per shooter per deadline.
+  const fkey=(round.number||0)+':'+uid+':'+(round.shooterDeadline||0);
+  if(window._mpForceKey===fkey)return;
+  window._mpForceKey=fkey;
+  _mpServerRoll({op:'force',uid:uid})
+    .then(res=>console.log('[dice] server force-roll',uid.slice(0,6),res&&res.dice))
+    .catch(err=>{ const c=err&&err.code?String(err.code):''; if(!/already-exists/.test(c)){ window._mpForceKey=null; console.error('Force roll failed',c,err&&err.message); } });
 }
 
 // Advance to the next shooter (or settlement if queue done). Called by both
@@ -12359,26 +12358,21 @@ function mpHostRollBank(){
       }
     }
   }
-  // Roll honest dice — NO dampeners in multiplayer (human-vs-human is fair)
-  const vals=[rollDie(),rollDie(),rollDie()];
-  const {resultType,handLabel}=mpBankHandFromDice(vals);   // shared rulebook (Stage 0)
-
-  // First write phase=bank-rolling so everyone sees the shake animation,
-  // then write the result a moment later. This makes the roll feel "live"
-  // even though the value is decided up front.
-  _mpRoomRef.child('round').update({phase:'bank-rolling'}).then(()=>{
-    setTimeout(()=>{
-      _mpRoomRef.child('round').update({
-        phase:'bank-result',
-        bankDice:vals,
-        bankHand:handLabel,
-        bankResultType:resultType
-      }).catch(err=>console.error('bank-result write failed',err));
-    },1500);
-  }).catch(err=>{
-    console.error('bank-rolling write failed',err);
-    showToast('Could not roll — check connection');
-  });
+  // Stage 1 (11-05c): the SERVER throws the bank's dice. We write
+  // phase=bank-rolling so every phone shows the shake, then ask rollDice,
+  // which waits ~1.2s and writes bank-result with the dice. If the call
+  // fails, put the phase back so the host can roll again.
+  const wasPhase=r?r.phase:'pre-roll';
+  _mpRoomRef.child('round').update({phase:'bank-rolling'})
+    .then(()=>_mpServerRoll({op:'bank'}))
+    .then(res=>console.log('[dice] server bank roll',res&&res.dice,res&&res.resultType))
+    .catch(err=>{
+      const c=err&&err.code?String(err.code):'';
+      console.error('bank roll failed',c,err&&err.message);
+      if(/aborted/.test(c))return;            // another call already resolved it
+      _mpRoomRef.child('round/phase').set(wasPhase==='bank-rolling'?'pre-roll':wasPhase).catch(()=>{});
+      showToast('Could not roll \u2014 tap ROLL again');
+    });
 }
 
 // ── Bank dice rendering (static, no physics — Step 4 will animate) ──────
@@ -12888,6 +12882,7 @@ function mpLeaveTable(skipFirebase){
       // no seat dropped, host waiting forever on a player who had gone.
       const roomRef=_mpRoomRef;
       const myUid=_mpMyUid;
+      const codeAtLeave=String((_mpRoom&&_mpRoom.code)||_prRoomCode||'');   // 11-05c: captured before teardown nulls it
       roomRef.once('value').then(snap=>{
         const serverRoom=snap.val()||{};
         const seats=serverRoom.seats||{};
@@ -12925,21 +12920,15 @@ function mpLeaveTable(skipFirebase){
           // shooter and advances the queue past them naturally. Use a
           // single multi-path update so it's atomic-ish.
           {
-            const bankrollBefore=serverRoom.bankroll||0;
-            const updates={};
-            updates['bankroll']=bankrollBefore+svrForfeit;
-            updates['bankrollAt']=balNow();   // 11-02a
-            updates['round/bets/'+myUid+'/status']='forfeit';
-            updates['round/bets/'+myUid+'/resultType']='lose';
-            updates['round/bets/'+myUid+'/forfeitedAt']=Date.now();
-            // Placeholder dice (1-1-1 / Trips, but it doesn't matter since
-            // settlement looks at status==='bet' not the dice) so the host
-            // sees a "rolled" entry and auto-advances the shooter queue.
-            updates['round/bets/'+myUid+'/dice']=[1,1,1];
-            updates['round/bets/'+myUid+'/hand']='Forfeit';
-            updates['round/bets/'+myUid+'/shooting']=false;
-            if(mine!==undefined)updates['seats/'+mine]=null;
-            roomRef.update(updates).catch(e=>console.warn('[mp] leave forfeit write failed',e));
+            // Stage 1 (11-05c): the forfeit is done by the SERVER. The old
+            // client multi-path write included `bankroll`, which the rules
+            // only let the host write — so for a shooter the whole update
+            // was refused and the forfeit never happened. rollDice op:forfeit
+            // moves the bet to the bank, marks the entry, and frees the seat.
+            const codeNow=(serverRoom&&serverRoom.code)||codeAtLeave;
+            firebase.functions().httpsCallable('rollDice')({code:String(codeNow),op:'forfeit'})
+              .then(r=>console.log('[mp] forfeit via server',r&&r.data))
+              .catch(e=>console.warn('[mp] server forfeit failed',e&&e.code,e&&e.message));
           }
         }else{
           // No chips at risk — but the seat STILL has to be cleared out of the
