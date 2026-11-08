@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-05f';
+  window.CLO_BUILD = '2026-11-07a';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -7011,29 +7011,18 @@ async function _doClaimReferralCredit(){
     // AFTER the claim and write the pre-bonus balance back over it.
     // Capped at 4s: offline, pending writes never flush and we must not hang.
     try{ if(_db.waitForPendingWrites)await Promise.race([_db.waitForPendingWrites(),new Promise(r=>setTimeout(r,4000))]); }catch(_){}
-    const ref=_db.collection('players').doc(_uid);
-    const claimed=await _db.runTransaction(async tx=>{
-      const snap=await tx.get(ref);
-      if(!snap.exists)return null;
-      const srv=snap.data()||{};
-      const owed=(typeof srv.pendingReferralCredit==='number')?srv.pendingReferralCredit:0;
-      // Play Billing chips land in their own ledger (written by verifyPurchase).
-      // Drain it in the same commit so one transaction covers both.
-      const bought=(typeof srv.pendingPurchaseCredit==='number')?srv.pendingPurchaseCredit:0;
-      if(owed<=0&&bought<=0)return null;
-      const base=(typeof _profile.balance==='number')?_profile.balance:0;
-      const newBal=base+Math.max(owed,0)+Math.max(bought,0);
-      const w={balance:newBal,balAt:balNow()};   // 11-02a
-      if(owed>0)w.pendingReferralCredit=0;
-      if(bought>0){
-        w.pendingPurchaseCredit=0;
-        // Analytics only — never totalEarned (that would sell rank + leaderboard).
-        w.purchasedTotal=(typeof srv.purchasedTotal==='number'?srv.purchasedTotal:0)+bought;
-      }
-      tx.set(ref,w,{merge:true});
-      return {owed:Math.max(owed,0),bought:Math.max(bought,0),newBal,credited:srv.referralsCredited,purchasedTotal:w.purchasedTotal};
-    });
-    if(claimed){
+    // Stage 2 (11-07a): the drain runs on the SERVER (rollDice op 'claim') —
+    // one Firestore transaction there, same arithmetic this phone used to
+    // run: balance += pendingReferralCredit + pendingPurchaseCredit, ledgers
+    // zeroed, purchasedTotal bumped (never totalEarned). And when we are
+    // seated, the same call adds the amount to our seat (or the bankroll if
+    // we host), so a top-up at a live table reaches the chair without this
+    // phone touching a seat balance — the Stage 2 rules refuse that now.
+    if(!window.firebase||!firebase.functions)throw new Error('functions SDK missing');
+    const code=(_mpRoom&&_mpRoom.code)||_prRoomCode||'';
+    const res=await firebase.functions().httpsCallable('rollDice')({op:'claim',code:String(code||'')});
+    const claimed=res&&res.data;
+    if(claimed&&(claimed.owed>0||claimed.bought>0)){
       _profile.balance=claimed.newBal;
       _profile.pendingReferralCredit=0;
       _profile.pendingPurchaseCredit=0;
@@ -7042,22 +7031,19 @@ async function _doClaimReferralCredit(){
       setBalance(claimed.newBal,'claim',balNow());   // 11-02a
       saveLocalProfile(_profile);
       _refreshChipDisplays();
-      // Bought chips while seated at a live table: the seat is the source of
-      // truth there (see grantChipPurchase), so push the new balance to it or
-      // the next room snapshot would reset it to the old seat value.
-      if(claimed.bought>0){ try{ if(typeof mpPushBalanceToSeat==='function')mpPushBalanceToSeat(); }catch(_){} }
+      if(code&&!claimed.seatCredited)console.warn('[billing] claim: not seated at',code,'\u2014 seat not credited (profile was)');
       try{
         if(typeof showToast==='function'){
-          if(claimed.bought>0)showToast('+'+claimed.bought.toLocaleString()+' chips added! 🪙');
-          if(claimed.owed>0)showToast('🎁 +'+claimed.owed.toLocaleString()+' referral bonus from your crew!');
+          if(claimed.bought>0)showToast('+'+claimed.bought.toLocaleString()+' chips added! \ud83e\ude99');
+          if(claimed.owed>0)showToast('\ud83c\udf81 +'+claimed.owed.toLocaleString()+' referral bonus from your crew!');
         }
       }catch(_){}
       if(claimed.owed>0)console.log('[referral] claimed',claimed.owed);
-      if(claimed.bought>0)console.log('[billing] claimed',claimed.bought);
+      if(claimed.bought>0)console.log('[billing] claimed',claimed.bought,claimed.seatCredited?'(+seat)':'');
     }
   }catch(e){
-    // Lost a race or offline. The bonus is still in pendingReferralCredit,
-    // so the next boot or lobby visit claims it. Allow a retry soon.
+    // Lost a race or offline. The bonus is still in the ledger, so the next
+    // boot or lobby visit claims it. Allow a retry soon.
     _referralClaimAt=0;
     console.warn('[referral] claim deferred:',e&&e.code?e.code:e);
   }finally{ _referralClaimBusy=false; }
@@ -8074,10 +8060,9 @@ function chipShopBack(){
     // Came from a bust-out at a live multiplayer table. The seat and the room
     // listener were never torn down — goToChipShop only swaps screens — so
     // returning here drops the player straight back into their seat.
-    // The purchase must be pushed INTO the seat: the seat is what the bet
-    // buttons read, and the room listener syncs it back over the local
-    // balance. Without this the player returns still busted.
-    if(typeof mpPushBalanceToSeat==='function')mpPushBalanceToSeat();
+    // Stage 2 (11-07a): the purchase reached the seat on the SERVER (rollDice
+    // op 'claim' credits the seat in the same call that drains the ledger),
+    // so there is nothing to push from here any more.
     showScreen('mp-game');
   }else{
     goToLanding();
@@ -8235,6 +8220,33 @@ function chipPackById(id){ return CHIP_TIERS.find(t=>t.productId===id); }
 function grantChipPurchase(packId){
   const t=chipPackById(packId);
   if(!t)return false;
+  // Stage 2 (11-07a): a preview/simulated purchase takes the SAME road as a
+  // real one — the chips go into the purchase ledger on the profile and the
+  // server's claim drains them into the balance and, if we are seated, the
+  // seat. (A real purchase's ledger entry is written by verifyPurchase.) No
+  // phone can push a balance into a seat any more, so this is the only way a
+  // test buy at a live table reaches the chair. Offline: local only, as before.
+  if(_db&&_uid&&!_isOffline&&window.firebase&&firebase.firestore&&firebase.firestore.FieldValue){
+    try{
+      const inc=firebase.firestore.FieldValue.increment(t.chips);
+      _db.collection('players').doc(_uid).set({pendingPurchaseCredit:inc},{merge:true})
+        .then(()=>claimReferralCredit(true))
+        .catch(e=>{console.warn('[billing] preview ledger write failed \u2014 crediting locally',e);_grantChipsLocal(t);});
+      awardXP('chipbuy');
+      if(typeof soundWin==='function')soundWin();
+      maybeShowLinkNudge('purchase');   // 11-05a
+      return true;                      // the claim's own toast announces the chips
+    }catch(e){ console.warn('[billing] preview ledger path failed \u2014 crediting locally',e); }
+  }
+  _grantChipsLocal(t);
+  awardXP('chipbuy');
+  showToast(`+${fmtChips(t.chips)} chips! \ud83e\ude99`);
+  if(typeof soundWin==='function')soundWin();
+  maybeShowLinkNudge('purchase');   // 11-05a
+  return true;
+}
+// Offline / fallback grant: the pre-Stage-2 path, minus the seat push.
+function _grantChipsLocal(t){
   balance+=t.chips;
   // Persist the new balance so chips are NOT lost on navigation
   if(_profile){
@@ -8250,19 +8262,6 @@ function grantChipPurchase(packId){
   }
   // Repaint every balance label (chip store, landing, lobby, Free Roll, MP bar).
   _refreshChipDisplays();
-  // If seated at a live MP table, the SEAT is the source of truth for betting
-  // and mpSyncLocalBalanceFromRoom copies it back over `balance` on every
-  // listener fire. Pushing only from chipShopBack() was too narrow — reaching
-  // the store from the header or the lobby left the seat stale, so the top-up
-  // never registered AND the next sync reset the local balance to the seat's
-  // zero, which a later settlement then wrote to Firestore. Push here, at the
-  // one place every purchase lands.
-  if(typeof mpPushBalanceToSeat==='function')mpPushBalanceToSeat();
-  awardXP('chipbuy');
-  showToast(`+${fmtChips(t.chips)} chips! 🪙`);
-  if(typeof soundWin==='function')soundWin();
-  maybeShowLinkNudge('purchase');   // 11-05a
-  return true;
 }
 
 // ── Remove Ads (one-time, non-consumable IAP) ───────────────────────────
@@ -9148,10 +9147,15 @@ function prArmSeatPresence(pushBalance){
   //    now HELD rather than deleted on disconnect, that snapshot can be
   //    arbitrarily stale. Malik hit exactly this — rebuilt his profile at 13k,
   //    rejoined, and the seat's old 1,000,000+ was synced back over it.
-  if(pushBalance&&typeof balance==='number'){
-    const at=balNow(); _balAt=Math.max(_balAt,at);
-    ref.child('seats/'+seatKey).update({balance:balance,balAt:at})   // 11-02a: stamped
-      .catch(e=>console.warn('[mp] rejoin balance assert failed',e));
+  if(pushBalance){
+    // Stage 2 (11-07a): the assert runs on the SERVER (rollDice op 'seatSync'
+    // copies the Firestore profile balance onto the held seat). A client write
+    // to seats/N/balance is refused by the rules once the seat exists.
+    if(window.firebase&&firebase.functions){
+      firebase.functions().httpsCallable('rollDice')({op:'seatSync',code:String(ref.key||'')})
+        .then(r=>console.log('[mp] rejoin: seat synced from profile \u2192',r&&r.data&&r.data.balance))
+        .catch(e=>console.warn('[mp] rejoin seat sync failed',e&&e.code,e&&e.message));
+    }
   }
   ref.child('seats/'+seatKey+'/status').onDisconnect().set('absent');
   // PASS-WITH-AMOUNT BUG (fixed Oct 11 2026). There used to be a second
@@ -9603,6 +9607,7 @@ function prCreateRoom(){
     minBet:Number(_prMinBetChoice||0),
     build:String(window.CLO_BUILD||''),   // 18a: lets joiners spot a stale app
     serverDice:true,                      // 11-05c: dice + forfeits come from rollDice
+    serverSettle:true,                    // 11-07a: settlement + chip claims too (Stage 2)
     public:!!isPublic,
     status:'waiting',
     createdAt:Date.now(),
@@ -10693,6 +10698,22 @@ function mpHostWatchdogTick(){
   // finishes before the watchdog steps in. At 3s it beat the hold on every
   // force-roll ("shooter resolved but round stalled" on a round that
   // wasn't), cutting the dice short by ~0.4s. 11-05e.
+  // Stage 2 (11-07a): the round is decided but the server settle never
+  // landed (call failed, tab throttled, phone asleep at the moment the
+  // phase timer should have fired). Ask again, no sooner than 8s after the
+  // deciding throw and 8s after the last ask.
+  if((r.phase==='bank-result'||r.phase==='player-rolls')&&mpSettlementReady(r).ok){
+    let decidedAt=0;
+    if(r.phase==='bank-result')decidedAt=r.bankRolledAt||0;
+    else{const bets=r.bets||{};for(const u in bets){const b=bets[u];if(mpIsSettleableBet(b)&&b.rolledAt>decidedAt)decidedAt=b.rolledAt;}}
+    if(decidedAt&&now>decidedAt+8000&&Date.now()-_mpSettleAskedAt>8000){
+      _mpWatchLastAct=now;
+      console.warn('[mp watchdog] round decided but not settled \u2014 asking the server again');
+      _mpSettleAskedKey=null;
+      mpHostServerSettle(r.phase);
+      return;
+    }
+  }
   if(r.phase==='player-rolls'&&r.shooterDeadline&&now>r.shooterDeadline+4500){
     const q=r.shooterQueue||[];
     const uid=q[r.currentShooterIdx||0];
@@ -11821,116 +11842,40 @@ function mpRenderDiceInto(row,vals){
 // ════════════════════════════════════════════════════════════════════════
 
 // Bank won outright (Trips/Headcrack/C-LO) — take every bettor's bet
-function mpHostSettleBankWin(){
+// ── Settlement — on the server since Stage 2 (11-07a) ────────────────────
+// The three entry points below used to compute the summary and write every
+// seat balance + the bankroll FROM THIS PHONE (mpHostApplySettlement, now
+// gone). They all ask rollDice op 'settle' instead: the server recomputes the
+// same summary with the shared rulebook (mpComputeSettlement, same block as
+// the dice), writes seats + bankroll + phase + summary in ONE transaction on
+// the room, then writes every player's Firestore profile — present or not —
+// and echoes the new figures onto round.profiles for the phones to adopt
+// (mpRenderSettlementPhase). The Stage 2 RTDB rules refuse any client write
+// to a seat balance or the bankroll after creation, so this phone could not
+// settle any more even if it tried. Asked once per round+phase: the server
+// refuses a second settle (already-exists) anyway, but there is no point
+// asking twice. On a real failure the latch clears and the watchdog re-asks.
+let _mpSettleAskedKey=null, _mpSettleAskedAt=0;
+function mpHostServerSettle(fromPhase){
   if(!_mpIsHost||!_mpRoomRef||!_mpRoom)return;
   const round=_mpRoom.round;
-  if(!round||round.phase!=='bank-result')return;
-  const bets=round.bets||{};
-  const summary={};
-  let bankDelta=0;
-  for(const uid in bets){
-    const b=bets[uid];
-    if(b&&b.status==='bet'&&b.amount>0){
-      summary[uid]={delta:-b.amount,reason:'lose'};
-      bankDelta+=b.amount;
-    }
-  }
-  mpHostApplySettlement(summary,bankDelta);
-}
-// Bank busted (Ace) — pay every bettor their bet
-function mpHostSettleBankLose(){
-  if(!_mpIsHost||!_mpRoomRef||!_mpRoom)return;
-  const round=_mpRoom.round;
-  if(!round||round.phase!=='bank-result')return;
-  const bets=round.bets||{};
-  const summary={};
-  let bankDelta=0;
-  for(const uid in bets){
-    const b=bets[uid];
-    if(b&&b.status==='bet'&&b.amount>0){
-      summary[uid]={delta:+b.amount,reason:'win'};
-      bankDelta-=b.amount;
-    }
-  }
-  mpHostApplySettlement(summary,bankDelta);
-}
-// Bank set a point and all shooters rolled — settle per-shooter result
-function mpHostBeginSettlement(){
-  if(!_mpIsHost||!_mpRoomRef||!_mpRoom)return;
-  const round=_mpRoom.round;
-  if(!round||round.phase!=='player-rolls')return;
-  const bets=round.bets||{};
-  const summary={};
-  let bankDelta=0;
-  for(const uid in bets){
-    const b=bets[uid];
-    if(b&&b.status==='bet'&&b.amount>0){
-      // b.hand is UNDEFINED on a bet that has not rolled yet (the key does not
-      // exist until mpPlayerRoll's reveal write lands). RTDB accepts null but
-      // REJECTS undefined, and it rejects the ENTIRE update — so one unrolled
-      // shooter killed the whole settlement write and hung the round with
-      // "values argument contains undefined in property ...settlementSummary...hand".
-      // Coalesce to null so a partial summary still writes.
-      const hand=(b.hand===undefined)?null:b.hand;
-      if(b.resultType==='win'){
-        summary[uid]={delta:+b.amount,reason:'win',hand:hand};
-        bankDelta-=b.amount;
-      }else if(b.resultType==='lose'){
-        summary[uid]={delta:-b.amount,reason:'lose',hand:hand};
-        bankDelta+=b.amount;
-      }else{
-        summary[uid]={delta:0,reason:'push',hand:hand};
-      }
-    }
-  }
-  mpHostApplySettlement(summary,bankDelta);
-}
-
-// Apply all balance changes atomically (best-effort with Firebase update)
-function mpHostApplySettlement(summary,bankDelta){
-  if(!_mpRoomRef||!_mpRoom)return;
-  const updates={};
-  const seats=_mpRoom.seats||{};
-
-  // Per-shooter balance updates
-  const settleAt=balNow();   // 11-02a: one stamp for every balance this settlement writes
-  for(const uid in summary){
-    const delta=summary[uid].delta;
-    if(delta===0)continue;
-    // Find seat key for this uid
-    let seatKey=null;
-    for(const k in seats){if(seats[k]&&seats[k].uid===uid){seatKey=k;break;}}
-    if(seatKey===null)continue;
-    const currentBal=seats[seatKey].balance||0;
-    updates['seats/'+seatKey+'/balance']=Math.max(0,currentBal+delta);
-    updates['seats/'+seatKey+'/balAt']=settleAt;   // 11-02a
-  }
-
-  // Bank (host) bankroll update
-  const bankBefore=_mpRoom.bankroll||0;
-  if(bankBefore+bankDelta<0){
-    console.error('[mp] BANK SHORTFALL — bets exceeded the bankroll',bankBefore,bankDelta);
-    showToast('Bank shortfall — please report this');
-  }
-  updates['bankroll']=Math.max(0,bankBefore+bankDelta);
-  updates['bankrollAt']=settleAt;   // 11-02a
-
-  // Round status
-  updates['round/phase']='settlement';
-  updates['round/settlementSummary']=summary;
-  updates['round/bankDelta']=bankDelta;
-
-  // GENERAL GUARD: a single undefined anywhere in an RTDB multi-path update
-  // rejects the whole write. This is the second time an atomic write has died
-  // on one bad value, so strip undefined defensively rather than trusting
-  // every field upstream.
-  for(const k in updates){if(updates[k]===undefined)delete updates[k];}
-
-  _mpRoomRef.update(updates).catch(err=>{
-    console.error('Settlement write failed',err);
-    showToast('Settlement could not save');
+  if(!round||round.phase!==fromPhase)return;
+  const key=(round.number||0)+':'+fromPhase;
+  if(_mpSettleAskedKey===key)return;
+  _mpSettleAskedKey=key; _mpSettleAskedAt=Date.now();
+  _mpServerRoll({op:'settle'}).then(res=>{
+    console.log('[settle] server: bank',(res&&res.bankDelta),'·',(res&&res.players),'players ·',(res&&res.profiles),'profiles written');
+  }).catch(err=>{
+    const code=String((err&&err.code)||'');
+    console.error('[settle] failed',code,String((err&&err.message)||err));
+    if(/already-exists/.test(code))return;        // another call got there first — the snapshot will show it
+    _mpSettleAskedKey=null;                        // let the watchdog ask again
+    showToast('Settlement didn\'t go through \u2014 retrying');
   });
 }
+function mpHostSettleBankWin(){mpHostServerSettle('bank-result');}
+function mpHostSettleBankLose(){mpHostServerSettle('bank-result');}
+function mpHostBeginSettlement(){mpHostServerSettle('player-rolls');}
 
 // ── Multiplayer bust-out ────────────────────────────────────────────────
 // A shooter who hits $0 at a live table is not stuck: passing is always
@@ -11987,6 +11932,19 @@ function mpBustShop(){
   goToChipShop('mp-game');
 }
 
+// Stage 2: take the server's post-settlement figures for my profile. Stats
+// are copied as-is; the balance is only taken when it agrees with what the
+// seat sync already put in memory (it always should — both came from the
+// same transaction), so a late-arriving echo can never roll a newer claim
+// or purchase back.
+function mpAdoptServerProfile(srv){
+  if(!_profile||!srv)return;
+  for(const k of ['wins','losses','totalEarned','winStreak']){
+    if(typeof srv[k]==='number')_profile[k]=srv[k];
+  }
+  if(typeof srv.balance==='number'&&srv.balance===balance)_profile.balance=srv.balance;
+  if(typeof saveLocalProfile==='function')saveLocalProfile(_profile);
+}
 function mpRenderSettlementPhase(room,round){
   const summary=(round.settlementSummary)||{};
   const noBets=summary.noBets;
@@ -12031,26 +11989,20 @@ function mpRenderSettlementPhase(room,round){
       // ── REP / stats accrual for the local player ─────────────────────
       // The listener may fire multiple times for the same settlement, so
       // gate on round.number + a flag so we only count once per round.
+      // Stage 2 (11-07a): the SERVER wrote my profile — balance and
+      // wins/losses/totalEarned/winStreak — in the same stroke as the seats,
+      // and echoed the figures onto round.profiles. Adopt them instead of
+      // counting here: this phone can never run ahead of or behind the
+      // record, and a phone that was not even here is counted all the same
+      // (it used to write its own stats from the delta, so a dropped loser
+      // never recorded the loss). The echo lands a beat after the settlement
+      // snapshot, so this block simply waits for it.
       const roundKey='mp-counted-'+(round.number||0);
-      if(_profile&&!window[roundKey]){
+      const srvMine=(round.profiles||{})[_mpMyUid];
+      if(_profile&&srvMine&&!window[roundKey]){
         window[roundKey]=true;
-        if(mine.delta>0){
-          _profile.wins=(_profile.wins||0)+1;
-          _profile.totalEarned=(_profile.totalEarned||0)+mine.delta;
-          _profile.winStreak=(_profile.winStreak||0)+1;
-        }else if(mine.delta<0){
-          _profile.losses=(_profile.losses||0)+1;
-          _profile.winStreak=0;
-        }
-        _profile.balance=balance;
-        if(window._updateProfile)window._updateProfile({
-          wins:_profile.wins||0,
-          losses:_profile.losses||0,
-          totalEarned:_profile.totalEarned||0,
-          balance:_profile.balance||0,
-          winStreak:_profile.winStreak||0
-        }).catch(()=>{});
-        // Check for tier-up celebration AFTER stats are saved
+        mpAdoptServerProfile(srvMine);
+        // Check for tier-up celebration AFTER stats are adopted
         if(mine.delta>0)checkTierUp();
       }
     }else if(room.hostUid===_mpMyUid){
@@ -12064,27 +12016,15 @@ function mpRenderSettlementPhase(room,round){
       // from their real purse, it has to be written back or hosting either
       // mints or destroys chips. Gated on round number so a listener re-fire
       // cannot double-count.
+      // Stage 2 (11-07a): same as the players — the server wrote the host's
+      // profile from the new bankroll and echoed it; adopt, don't count.
+      // (The bankroll itself reached `balance` via mpSyncLocalBalanceFromRoom
+      // at the top of this function.)
       const hostKey='mp-host-counted-'+(round.number||0);
-      if(_profile&&!window[hostKey]){
+      const srvHost=(round.profiles||{})[_mpMyUid];
+      if(_profile&&srvHost&&!window[hostKey]){
         window[hostKey]=true;
-        const newBal=(room.bankroll!=null)?room.bankroll:balance;
-        setBalance(newBal,'settle:bank',typeof room.bankrollAt==='number'?room.bankrollAt:undefined);   // 11-02a
-        _profile.balance=newBal;
-        if(bd>0){
-          _profile.wins=(_profile.wins||0)+1;
-          _profile.winStreak=(_profile.winStreak||0)+1;
-          _profile.totalEarned=(_profile.totalEarned||0)+bd;
-        }else if(bd<0){
-          _profile.losses=(_profile.losses||0)+1;
-          _profile.winStreak=0;
-        }
-        if(window._updateProfile)window._updateProfile({
-          wins:_profile.wins||0,
-          losses:_profile.losses||0,
-          totalEarned:_profile.totalEarned||0,
-          balance:_profile.balance||0,
-          winStreak:_profile.winStreak||0
-        }).catch(()=>{});
+        mpAdoptServerProfile(srvHost);
         if(bd>0)checkTierUp();
       }
     }else{
@@ -12191,8 +12131,9 @@ function mpPickStake(purse){
     overlay.onclick=e=>{ if(e.target===overlay)done(null); };
   });
 }
-// The bank cannot post the 100K table minimum: buy chips (the purchase is
-// pushed into room.bankroll by mpPushBalanceToSeat) or close the table.
+// The bank cannot post the 100K table minimum: buy chips (the purchase lands
+// in room.bankroll on the server — rollDice op 'claim' credits the bankroll
+// for a seated host, Stage 2) or close the table.
 let _mpBrokeShown=false;
 function mpHostShowBrokeBank(purse){
   if(_mpBrokeShown)return; _mpBrokeShown=true;
@@ -12236,26 +12177,12 @@ function mpBrokeClose(){
 // the local `balance` on every listener fire. So buying chips without this
 // left the player still busted — their purchase updated the local var and
 // Firestore, then got overwritten by the stale seat value on the next sync.
+// mpPushBalanceToSeat — RETIRED in Stage 2 (11-07a). Seat balances and the
+// bankroll are server-written after creation (RTDB rules refuse a client
+// write), and a purchase or claim reaches the seat through rollDice op
+// 'claim'. Kept as a no-op so any stale caller is harmless.
 function mpPushBalanceToSeat(){
-  if(!_mpRoomRef||!_mpMyUid||!_mpRoom)return;
-  if(_mpIsHost||_mpRoom.hostUid===_mpMyUid){
-    // Host: the purse IS the bankroll. A chip purchase or claim while hosting
-    // (sweetening a broke bank) has to land in room.bankroll or the next
-    // snapshot resets `balance` to the old figure. Piece 3, Oct 14 2026.
-    const at=balNow(); _balAt=Math.max(_balAt,at);
-    _mpRoomRef.update({bankroll:balance,bankrollAt:at})   // 11-02a: stamped
-      .catch(e=>console.warn('[mp] bankroll push failed',e));
-    return;
-  }
-  const seats=_mpRoom.seats||{};
-  for(const k in seats){
-    if(seats[k]&&seats[k].uid===_mpMyUid){
-      const at=balNow(); _balAt=Math.max(_balAt,at);
-      _mpRoomRef.child('seats/'+k).update({balance:balance,balAt:at})   // 11-02a: stamped
-        .catch(e=>console.warn('[mp] seat balance push failed',e));
-      return;
-    }
-  }
+  console.warn('[mp] mpPushBalanceToSeat is retired (Stage 2) \u2014 seat balances are server-written');
 }
 
 function mpGetMyBalance(room){  if(!room||!_mpMyUid)return 0;
@@ -12332,10 +12259,17 @@ function mpHostSeedSeatBalance(room){
   for(const k in seats){
     const s=seats[k];
     if(s&&s.uid&&s.balance==null){
-      // We don't know remote players' balances. Default 10K starter for guests.
-      // (When seat is first claimed, the joining device should write its own
-      // balance; this is a safety net.)
-      _mpRoomRef.child('seats/'+k).update({balance:10000,balAt:balNow()}).catch(()=>{});   // 11-02a
+      // Safety net for a seat that never got a balance (the joining device
+      // writes it when it takes the seat). Stage 2 (11-07a): this used to
+      // write a 10K default from here, which the rules now refuse on an
+      // existing seat — so ask the server to copy that player's own profile
+      // balance onto the seat instead. Once per seat per 15s.
+      window._mpSeedAskedAt=window._mpSeedAskedAt||{};
+      if(Date.now()-(window._mpSeedAskedAt[k]||0)<15000)continue;
+      window._mpSeedAskedAt[k]=Date.now();
+      _mpServerRoll({op:'seatSync',uid:String(s.uid)})
+        .then(r=>console.log('[mp] seeded seat',k,'from profile \u2192',r&&r.balance))
+        .catch(e=>console.warn('[mp] seat seed failed',k,e&&e.code,e&&e.message));
     }
   }
 }
@@ -12975,7 +12909,23 @@ function mpLeaveTable(skipFirebase){
             // moves the bet to the bank, marks the entry, and frees the seat.
             const codeNow=(serverRoom&&serverRoom.code)||codeAtLeave;
             firebase.functions().httpsCallable('rollDice')({code:String(codeNow),op:'forfeit'})
-              .then(r=>console.log('[mp] forfeit via server',r&&r.data))
+              .then(r=>{
+                const d=r&&r.data;
+                console.log('[mp] forfeit via server',d);
+                // Stage 2 (11-07a): the server debited our PROFILE by the
+                // forfeited bet (before, the bank gained it and we kept it —
+                // every forfeit minted chips). Adopt the figure so the lobby
+                // shows the truth now, not after the next boot.
+                if(d&&typeof d.balance==='number'&&d.forfeited>0){
+                  setBalance(d.balance,'forfeit',balNow());
+                  if(_profile){
+                    _profile.balance=d.balance;
+                    _profile.losses=(_profile.losses||0)+1; _profile.winStreak=0;
+                    if(typeof saveLocalProfile==='function')saveLocalProfile(_profile);
+                  }
+                  if(typeof _refreshChipDisplays==='function')_refreshChipDisplays();
+                }
+              })
               .catch(e=>console.warn('[mp] server forfeit failed',e&&e.code,e&&e.message));
           }
         }else{
@@ -14744,6 +14694,55 @@ function mpCompareToBankPoint(roll,round){
   }
   // Defensive fallback
   return 'push';
+}
+// ── Settlement (Stage 2, Nov 7 2026) ─────────────────────────────────────
+// A live bet is status 'bet' with money down. Forfeits already moved their
+// money when the player left (rollDice op 'forfeit'), passes have none.
+function mpIsSettleableBet(b){
+  return !!(b&&b.status==='bet'&&typeof b.amount==='number'&&b.amount>0);
+}
+// Can this round be settled right now? Returns {ok:true, mode} or
+// {ok:false, reason}. mode is 'bank' (the bank's own throw decided it) or
+// 'shooters' (every shooter threw against the bank's point).
+function mpSettlementReady(round){
+  if(!round)return {ok:false,reason:'no round'};
+  const bets=round.bets||{};
+  if(round.phase==='bank-result'){
+    if(round.bankResultType==='win'||round.bankResultType==='lose')return {ok:true,mode:'bank'};
+    return {ok:false,reason:'bank has not decided ('+round.bankResultType+')'};
+  }
+  if(round.phase==='player-rolls'){
+    for(const uid in bets){
+      const b=bets[uid];
+      if(mpIsSettleableBet(b)&&!b.resultType)return {ok:false,reason:'unrolled shooter '+uid};
+    }
+    return {ok:true,mode:'shooters'};
+  }
+  return {ok:false,reason:'phase '+round.phase};
+}
+// The settlement itself: {summary:{uid:{delta,reason,hand}}, bankDelta}.
+// Even money both ways. Lifted verbatim from the three host functions
+// (mpHostSettleBankWin / BankLose / BeginSettlement) so the server settles
+// with the same arithmetic the page always used. `hand` is coalesced to
+// null — RTDB rejects undefined anywhere in a write.
+function mpComputeSettlement(round){
+  const ready=mpSettlementReady(round);
+  if(!ready.ok)return null;
+  const bets=round.bets||{};
+  const summary={};
+  let bankDelta=0;
+  for(const uid in bets){
+    const b=bets[uid];
+    if(!mpIsSettleableBet(b))continue;
+    const hand=(b.hand===undefined)?null:b.hand;
+    let r;
+    if(ready.mode==='bank')r=(round.bankResultType==='lose')?'win':'lose';   // bank bust pays everyone, bank instant win takes everyone
+    else r=(b.resultType==='win')?'win':(b.resultType==='lose')?'lose':'push';
+    if(r==='win'){summary[uid]={delta:+b.amount,reason:'win',hand:hand};bankDelta-=b.amount;}
+    else if(r==='lose'){summary[uid]={delta:-b.amount,reason:'lose',hand:hand};bankDelta+=b.amount;}
+    else summary[uid]={delta:0,reason:'push',hand:hand};
+  }
+  return {summary:summary,bankDelta:bankDelta,mode:ready.mode};
 }
 // === CLO RULES END ===
 
