@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-08b';
+  window.CLO_BUILD = '2026-11-08c';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -9681,6 +9681,37 @@ function prJoinRoom(){
       showAlert('No table found with code "'+code+'".\n\nDouble-check the code with the host. The code is case-sensitive and must be exactly 5 characters.');
       return;
     }
+    // 11-08c: THE HOST COMES BACK AS THE BANK. The host holds no seat, so
+    // until now a host who force-quit and rejoined by code fell through to
+    // the new-player path below: took a seat at their own table as a player,
+    // and no device at the table was the host any more — nothing could
+    // settle the hand or deal the next one (Nov 8). Now: host role, heartbeat
+    // and reaper re-armed, any stray seat under the host's uid cleared, and
+    // straight to the table in whatever phase it is in (the host's phone
+    // picks the phase up: a decided hand settles, a settled one shows Next
+    // Round). A table that has not started yet goes to the waiting room.
+    if(room.hostUid&&room.hostUid===_uid&&room.status!=='closed'){
+      _prRoomCode=code;
+      _prIsHost=true;
+      _prRoomRef=ref;
+      _prMySeatKey=null; _prSeatSeen=false;
+      _presPublic=!!room.public;
+      _presRoomInfo={seats:room.seats||{},bank:Math.min(Number(room.stake||0)||(room.bankroll||0),room.bankroll||0),minBet:Number(room.minBet||0)};
+      const stray={};
+      for(const k in (room.seats||{})){ if(room.seats[k]&&room.seats[k].uid===_uid)stray['seats/'+k]=null; }
+      const clear=Object.keys(stray).length?ref.update(stray).catch(e=>console.warn('[mp] host rejoin: stray seat clear failed',e)):Promise.resolve();
+      clear.then(()=>{
+        presenceUpdate();
+        mpStartReaper();
+        prStartHostHeartbeat();
+        if(btn){btn.disabled=false;btn.textContent='🎟️ Join Table';}
+        showToast('Welcome back \u2014 you\u2019re the bank');
+        console.log('[mp] host rejoined',code,'status',room.status,'phase',room.round&&room.round.phase);
+        if(room.status==='playing')mpEnterTable(ref,true);
+        else prEnterWaitingRoom();
+      });
+      return;
+    }
     // REJOIN. Check BEFORE the pre-game gate: a player who already holds a
     // seat at this table is returning to it, not joining a new one, so the
     // round being underway is irrelevant to them. Their seat was held (not
@@ -10147,6 +10178,7 @@ function mpEnterTable(roomRef,isHost){
   // inside mpInitRound then reads as "everyone has left" and bails. Since this
   // path runs exactly ONCE, that left the table stuck on "ROUND UNDEFINED"
   // with no buttons and no retry. Seeding _mpRoom here closes the race.
+  if(!_mpIsHost)mpStartSettleClock();   // 11-08c
   if(_mpIsHost){
     mpStartHostWatchdog();
     _mpRoomRef.once('value').then(snap=>{
@@ -10190,6 +10222,8 @@ let _prMinBetChoice=0;
 const MP_TURN_MS=12000;          // per-shooter clock to bet or pass
 const MP_SHOOTER_TIMER_MS=20000; // 20s per shooter to roll
 const MP_BANK_TIMER_MS=15000;    // 11-08b: the bank's clock to throw once bets are locked (see mpStartBankTimer)
+const MP_SETTLE_GRACE_MS=8000;   // 11-08c: a decided hand the bank hasn't settled in 8s is settled by the table (mpSettleClockTick)
+const MP_HOST_GONE_MS=90000;     // 11-08c: host heartbeat silent this long → "The bank left the table" (host beats every 15s)
 
 // Host only: create a fresh round object on Firebase
 function mpInitRound(num){
@@ -10719,23 +10753,13 @@ function mpHostWatchdogTick(){
   // phase timer should have fired). Ask again, no sooner than 8s after the
   // deciding throw and 8s after the last ask.
   if((r.phase==='bank-result'||r.phase==='player-rolls')&&mpSettlementReady(r).ok){
-    let decidedAt=0;
-    if(r.phase==='bank-result')decidedAt=r.bankRolledAt||0;
-    else{
-      // 11-07b: a forfeit decides a hand too, and the server stamps it
-      // forfeitedAt, not rolledAt. Counting only throws made the "deciding
-      // moment" the previous shooter's roll — so when the LAST shooter left
-      // more than 8s after it, this fired at once, ahead of the host's normal
-      // 3.4s pip-reading hold (Nov 7: both forfeit rounds settled by the
-      // watchdog instead of the queue). Money was never affected.
-      const bets=r.bets||{};
-      for(const u in bets){
-        const b=bets[u]; if(!b)continue;
-        if(mpIsSettleableBet(b)&&b.rolledAt>decidedAt)decidedAt=b.rolledAt;
-        if(b.status==='forfeit'&&b.forfeitedAt>decidedAt)decidedAt=b.forfeitedAt;
-      }
-    }
-    if(decidedAt&&now>decidedAt+8000&&Date.now()-_mpSettleAskedAt>8000){
+    // 11-07b: a forfeit decides a hand too (forfeitedAt, not rolledAt) —
+    // counting only throws made the watchdog fire the instant the last
+    // shooter left. 11-08c: the moment is now computed by the rulebook's
+    // mpDecidedAt, the same function the players' settle clock and the
+    // server's non-host settle gate use.
+    const decidedAt=mpDecidedAt(r);
+    if(decidedAt&&now>decidedAt+MP_SETTLE_GRACE_MS&&Date.now()-_mpSettleAskedAt>8000){
       _mpWatchLastAct=now;
       console.warn('[mp watchdog] round decided but not settled \u2014 asking the server again');
       _mpSettleAskedKey=null;
@@ -10774,6 +10798,52 @@ function mpHostWatchdogTick(){
 function mpStartHostWatchdog(){
   if(_mpHostWatchId)return;
   _mpHostWatchId=setInterval(mpHostWatchdogTick,2000);
+}
+// 11-08c: THE TABLE'S SETTLE CLOCK (players only). The bank clock (11-08b)
+// gets a dead host's dice thrown, but settlement was still asked for by the
+// host's phone alone — so a hand the server had already decided sat
+// unsettled forever when the host was gone (Nov 8: forced Headcrack, host
+// rejoined as a player, nobody could settle). The server does all the
+// arithmetic; the host was only ever the trigger. Now every seated player's
+// phone asks once the hand has been decided MP_SETTLE_GRACE_MS with no
+// settlement, and the server allows a non-host settle past that grace on
+// its own clock. First ask lands; the rest get already-exists.
+// The same tick watches the host's heartbeat (room.lastSeen, every 15s):
+// after settlement the next round needs the host's phone, so the table says
+// so; silent MP_HOST_GONE_MS → "The bank left the table" → lobby, seat
+// released, no forfeit (there is no bank to pay).
+let _mpSettleClockId=null, _mpHostGoneSaid=false;
+function mpStartSettleClock(){ if(_mpSettleClockId)return; _mpHostGoneSaid=false; _mpSettleClockId=setInterval(mpSettleClockTick,1000); }
+function mpStopSettleClock(){ if(_mpSettleClockId){clearInterval(_mpSettleClockId);_mpSettleClockId=null;} }
+function mpSettleClockTick(){
+  if(_mpIsHost||!_mpRoom||!_mpRoomRef)return;
+  const room=_mpRoom, r=room.round;
+  // Host heartbeat. Date.now() on both sides (prWriteHeartbeat stamps the
+  // host's clock); 90s swallows any skew that matters.
+  const seen=(typeof room.lastSeen==='number')?room.lastSeen:0;
+  const silent=seen?Date.now()-seen:0;
+  if(seen&&silent>MP_HOST_GONE_MS){
+    if(_mpHostGoneSaid)return;
+    _mpHostGoneSaid=true;
+    console.warn('[mp] host heartbeat silent '+Math.round(silent/1000)+'s — leaving the table');
+    showToast('The bank left the table');
+    setTimeout(()=>mpLeaveTable(false,{hostGone:true}),0);
+    return;
+  }
+  if(!r)return;
+  if(r.phase==='settlement'){
+    if(seen&&silent>20000)mpSetStatus('Waiting on the bank\u2026');
+    return;
+  }
+  const decidedAt=mpDecidedAt(r);
+  if(!decidedAt)return;
+  if(mpNow()<decidedAt+MP_SETTLE_GRACE_MS)return;
+  if(Date.now()-_mpSettleAskedAt<8000)return;
+  _mpSettleAskedAt=Date.now();
+  console.warn('[settle] hand decided '+Math.round((mpNow()-decidedAt)/1000)+'s ago and the bank has not settled — asking the server');
+  _mpServerRoll({op:'settle'})
+    .then(res=>console.log('[settle] server (asked by the table): bank',res&&res.bankDelta,'·',res&&res.players,'players'))
+    .catch(err=>console.log('[settle] table ask:',(err&&err.code)||err));   // already-exists = someone else got there; fine
 }
 function mpStopHostWatchdog(){
   if(_mpHostWatchId){clearInterval(_mpHostWatchId);_mpHostWatchId=null;}
@@ -12981,7 +13051,9 @@ function mpConfirmLeave(){
   };
 }
 
-function mpLeaveTable(skipFirebase){
+function mpLeaveTable(skipFirebase,opts){
+  opts=opts||{};
+  mpStopSettleClock();   // 11-08c
   // BOUNDARY: leaving hands ownership of the balance back to the profile.
   // `balance` is already current — mpSyncLocalBalanceFromRoom has been
   // tracking the seat all session — but the table is about to disappear, so
@@ -13039,7 +13111,13 @@ function mpLeaveTable(skipFirebase){
         const alreadyResolved=!!(svrBet&&(svrBet.resultType||svrBet.forced||svrBet.status==='forfeit'));
         const svrForfeit=(!alreadyResolved&&svrBet&&svrBet.status==='bet'&&svrBet.amount>0
                           &&RISK.indexOf(svrPhase)>=0) ? svrBet.amount : 0;
-        if(alreadyResolved){
+        if(opts.hostGone){
+          // 11-08c: the bank is gone (heartbeat silent MP_HOST_GONE_MS). There
+          // is nobody to pay a forfeit to and no next hand — release the seat
+          // and go. An unsettled hand is voided (the profile was never written
+          // for it); a settled one is already in the profile.
+          if(mine!==undefined)roomRef.child('seats/'+mine).set(null).catch(e=>console.warn('[mp] leave (host gone) seat release failed',e));
+        }else if(alreadyResolved){
           // Host already settled this hand's outcome. Drop the seat ONLY —
           // leave the bet exactly as it stands so settlement still applies it.
           const updates={};
@@ -14949,6 +15027,23 @@ function mpSettlementReady(round){
     return {ok:true,mode:'shooters'};
   }
   return {ok:false,reason:'phase '+round.phase};
+}
+// 11-08c: WHEN was this hand decided — the bank's deciding throw, or the
+// last shooter throw / forfeit; 0 when it is not decided (or carries no
+// stamps). The host's watchdog, every player's settle clock and the
+// server's non-host settle gate all read this one moment.
+function mpDecidedAt(round){
+  if(!round||!mpSettlementReady(round).ok)return 0;
+  const bankAt=(typeof round.bankRolledAt==='number')?round.bankRolledAt:0;
+  if(round.phase==='bank-result')return bankAt;
+  let t=bankAt;
+  const bets=round.bets||{};
+  for(const u in bets){
+    const b=bets[u]; if(!b)continue;
+    if(mpIsSettleableBet(b)&&typeof b.rolledAt==='number'&&b.rolledAt>t)t=b.rolledAt;
+    if(b.status==='forfeit'&&typeof b.forfeitedAt==='number'&&b.forfeitedAt>t)t=b.forfeitedAt;
+  }
+  return t;
 }
 // The settlement itself: {summary:{uid:{delta,reason,hand}}, bankDelta}.
 // Even money both ways. Lifted verbatim from the three host functions
