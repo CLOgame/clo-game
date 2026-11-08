@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-07b';
+  window.CLO_BUILD = '2026-11-07c';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -10493,6 +10493,10 @@ function mpHandleRoundState(room){
   const _mpPhaseChanged=(_mpLastPhaseKey!==_mpPhaseKey);
   _mpLastPhaseKey=_mpPhaseKey;
 
+  // 11-07b: announce forfeits AFTER the phase render below has drawn the
+  // strip, so nothing in the same pass paints over it (deferred one tick).
+  setTimeout(()=>{ try{ mpAnnounceForfeits(room,round); }catch(_){} },0);
+
   switch(round.phase){
     case 'betting':
       mpClearBankDice();
@@ -11440,13 +11444,8 @@ function mpRenderPlayerRollsPhase(room,round){
   }else{
     const lastResult=mpGetLastShooterResult(round);
     mpRenderShooterArea(round,lastResult);
-    // 11-07b: say that the shooter left. Their entry is a forfeit now, which
-    // the stage no longer throws (it used to roll 1-1-1 as "FORFEIT — LOSE"),
-    // so this line is the only word of it. Once per hand per leaver.
-    if(currentBet&&currentBet.status==='forfeit'){
-      const fkey='mp-forfeit-said-'+(round.number||0)+':'+currentUid;
-      if(!window[fkey]){ window[fkey]=true; mpSetLog(`${mpNameFor(room,currentUid)} forfeited`); }
-    }
+    // (11-07b: the leaver is announced by mpAnnounceForfeits, from the room
+    // handler — wherever in the hand the forfeit lands, queue or not.)
   }
 
   if(currentUid===_mpMyUid){
@@ -11672,6 +11671,30 @@ function mpNameFor(room,uid){
   if(seat&&seat.username)return seat.username;
   return _mpNameCache[uid]||'Player';
 }
+// 11-07b: every forfeit gets said once, on every other device, wherever in
+// the hand it lands. A forfeit is stored as a resolved loss and the stage no
+// longer throws its placeholder dice, so without this the table simply moved
+// on — nobody at it was told the leaver had gone (Nov 8). The first cut only
+// spoke when the leaver was the CURRENT shooter, in the footer strip, for the
+// 3.4s before settlement overwrote it; a forfeit during the bank's roll, or
+// before the queue reached the leaver, was never said at all. Now: a toast
+// for everyone else, the strip outside settlement (settlement lists forfeits
+// itself), latched per hand per leaver.
+function mpAnnounceForfeits(room,round){
+  if(!round||!round.bets)return;
+  for(const uid in round.bets){
+    const b=round.bets[uid];
+    if(!b||b.status!=='forfeit')continue;
+    const k='mp-forfeit-said-'+(round.number||0)+':'+uid;
+    if(window[k])continue;
+    window[k]=true;
+    const amt=(typeof b.amount==='number'&&b.amount>0)?' $'+b.amount.toLocaleString():'';
+    const line=`${mpNameFor(room,uid)} forfeited${amt}`;
+    if(round.phase!=='settlement')mpSetLog(line);
+    if(uid!==_mpMyUid&&typeof showToast==='function')showToast(line);
+    console.log('[mp]',line);
+  }
+}
 function mpGetLastShooterResult(round){
   const queue=round.shooterQueue||[];
   const idx=round.currentShooterIdx||0;
@@ -11749,10 +11772,7 @@ function mpRenderShooterArea(round,state){
   }
   // 11-07b: never throw a forfeit's placeholder dice (see
   // mpGetLastShooterResult). Belt and braces — the callers skip these now.
-  if(state.status==='forfeit'){
-    mpSetLog(`${mpNameFor(_mpRoom,state.uid)} forfeited`);
-    return;
-  }
+  if(state.status==='forfeit')return;   // mpAnnounceForfeits says it
   // Sub-step B: physics throw across the felt (right→left, player skin).
   // The result text goes to the LOG STRIP below the board (felt stays clean:
   // BANK + POINT + dice only). Revealed on settle so it follows the dice landing.
@@ -12099,6 +12119,15 @@ function mpRenderSettlementPhase(room,round){
       if(r.delta>0)parts.push(`${nm}+$${r.delta.toLocaleString()}`);
       else if(r.delta<0)parts.push(`${nm}-$${(-r.delta).toLocaleString()}`);
       else parts.push(`${nm} push`);
+    }
+    // 11-07b: leavers have no seat any more, so the loop above never names
+    // them. List each forfeit from the bets so the settlement strip tells
+    // the whole hand (mine included — my callout line carries no forfeit).
+    const fb=round.bets||{};
+    for(const u in fb){
+      const b=fb[u]; if(!b||b.status!=='forfeit')continue;
+      const amt=(typeof b.amount==='number'&&b.amount>0)?' $'+b.amount.toLocaleString():'';
+      parts.push(`${mpNameFor(room,u)} forfeited${amt}`);
     }
     mpSetLog(parts.join(' · ')||'Round complete');
   }
