@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-08a';
+  window.CLO_BUILD = '2026-11-08b';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -10189,6 +10189,7 @@ let _prMinBetChoice=0;
 // last seat has acted.
 const MP_TURN_MS=12000;          // per-shooter clock to bet or pass
 const MP_SHOOTER_TIMER_MS=20000; // 20s per shooter to roll
+const MP_BANK_TIMER_MS=15000;    // 11-08b: the bank's clock to throw once bets are locked (see mpStartBankTimer)
 
 // Host only: create a fresh round object on Firebase
 function mpInitRound(num){
@@ -10537,6 +10538,7 @@ function mpHandleRoundState(room){
       }else{
         mpSetActionBtn(null);
       }
+      mpStartBankTimer(round);   // 11-08b
       break;
 
     case 'bank-rolling':
@@ -10552,6 +10554,7 @@ function mpHandleRoundState(room){
 
     case 'bank-result':
       mpHideBetPanel();
+      mpStartBankTimer(round);   // 11-08b: a reroll carries a fresh server-stamped deadline; anything else clears the clock
       // Throw the dice; reveal the result text/badge ONLY when they settle,
       // so the outcome doesn't flash while the dice are still mid-air.
       mpThrowBankDice(round.bankDice||[1,1,1],()=>{
@@ -10648,6 +10651,7 @@ function mpHostAction(){/* placeholder — replaced by mpSetActionBtn */}
 // Local state for the bet timer (countdown shown in UI + auto-pass watchdog)
 let _mpBetTimerId=null;
 let _mpShooterTimerId=null;
+let _mpBankTimerId=null, _mpBankTimerKey=null;   // 11-08b
 // HOST WATCHDOG (Sep 24). The per-phase timers above are setIntervals started
 // from mpHandleRoundState — which only runs when a SNAPSHOT arrives. When a
 // shooter's device drops (airplane mode, dead signal) nothing writes, so no
@@ -11256,6 +11260,64 @@ function mpStartBetTimer(room,round){
   _mpBetTimerId=setInterval(tick,250);
 }
 
+// 11-08b: THE BANK'S CLOCK. Once bets are locked the bank has
+// MP_BANK_TIMER_MS to throw — a locked table should wait on the bank no more
+// than on a shooter (Malik, Nov 8). The host writes round.bankDeadline at the
+// lock (server time, like every other deadline); the server stamps a fresh
+// one on each no-pair reroll. Everyone counts it down on the status line.
+//   at 0        the host's own phone throws for the bank (same as a shooter's
+//               phone throwing for itself at the buzzer);
+//   at 0 + 2s   if the bank still hasn't thrown — the host's app is asleep —
+//               each seated player's phone asks the server to throw it. The
+//               function allows a non-host bank throw only from a seat at that
+//               table and only past the deadline on ITS clock; the first ask
+//               lands, the rest get "already rolled". The dice are the server's
+//               either way, so forcing gains nobody anything.
+// Idempotent per round+phase+deadline, like mpStartShooterTimer; it runs on
+// every snapshot of the two phases and must not restart itself.
+function mpStartBankTimer(round){
+  const live=!!(round&&typeof round.bankDeadline==='number'&&
+    (round.phase==='pre-roll'||(round.phase==='bank-result'&&round.bankResultType==='reroll')));
+  if(!live){
+    if(_mpBankTimerId){clearInterval(_mpBankTimerId);_mpBankTimerId=null;}
+    _mpBankTimerKey=null;
+    return;
+  }
+  const key=(round.number||0)+':'+round.phase+':'+round.bankDeadline;
+  if(_mpBankTimerId&&_mpBankTimerKey===key)return;
+  if(_mpBankTimerId){clearInterval(_mpBankTimerId);_mpBankTimerId=null;}
+  _mpBankTimerKey=key;
+  const rollable=()=>{ const r=_mpRoom&&_mpRoom.round; return !!(r&&(r.number||0)===(round.number||0)&&
+    (r.phase==='pre-roll'||(r.phase==='bank-result'&&r.bankResultType==='reroll'))); };
+  const tick=()=>{
+    if(!rollable()){ clearInterval(_mpBankTimerId);_mpBankTimerId=null;_mpBankTimerKey=null; return; }
+    const remain=Math.max(0,round.bankDeadline-mpNow());
+    const secs=Math.ceil(remain/1000);
+    // The countdown shows in pre-roll only; a reroll keeps its own status line
+    // (the host re-throws in 3.4s — this clock is just the safety net there).
+    if(round.phase==='pre-roll')mpSetStatus(_mpIsHost?('Roll the Bank \u00b7 '+secs+'s'):('Bank rolls in '+secs+'s'));
+    if(remain>0)return;
+    clearInterval(_mpBankTimerId);_mpBankTimerId=null;_mpBankTimerKey=null;
+    if(_mpIsHost){
+      // Deferred out of the listener, like every other host write.
+      setTimeout(()=>{ if(rollable()){ console.log('[dice] bank clock ran out — rolling'); mpHostRollBank(); } },0);
+      return;
+    }
+    // Player: give the host's phone two seconds, then ask the server ourselves.
+    setTimeout(()=>{
+      if(!rollable())return;
+      if(Date.now()-(window._mpBankForceAt||0)<3000)return;
+      window._mpBankForceAt=Date.now();
+      console.warn('[dice] bank clock ran out and the host has not thrown — asking the server');
+      _mpServerRoll({op:'bank'})
+        .then(res=>console.log('[dice] server bank roll (forced by table)',res&&res.dice,res&&res.resultType))
+        .catch(err=>console.log('[dice] forced bank roll:',(err&&err.code)||err));   // 'already-exists' = someone else got there; fine
+    },2000);
+  };
+  tick();
+  _mpBankTimerId=setInterval(tick,250);
+}
+
 // SAFETY NET for the pass-with-amount bug. A bet can only reach status 'pass'
 // with amount>0 through a write that forgot to zero the money (the old
 // onDisconnect handler was the only one). The money is the truth: treat such
@@ -11307,6 +11369,7 @@ function mpHostFinalizeBetting(round){
     updates['bets/'+stopUid+'/amount']=cap;
     updates['stoppedBy']=stopUid;
     updates['bankCovered']=true;
+    updates['bankDeadline']=mpNow()+MP_BANK_TIMER_MS;   // 11-08b
     const others=Object.keys(bets).filter(u=>u!==stopUid&&bets[u]&&bets[u].status==='bet'&&bets[u].amount>0).length;
     notes.length=0;
     notes.push(nameOf(stopUid)+' STOPPED THE BANK \u2014 $'+cap.toLocaleString()+(others?' \u00b7 '+others+' bet'+(others>1?'s':'')+' cancelled':''));
@@ -11363,6 +11426,7 @@ function mpHostFinalizeBetting(round){
   }
   if(remaining===0)notes.push('bank fully covered');
   updates['bankCovered']=(remaining===0);
+  updates['bankDeadline']=mpNow()+MP_BANK_TIMER_MS;   // 11-08b: the bank is on the clock from the lock
   updates['lockNotes']=notes.length?notes.join(' \u00b7 '):null;
   _mpRoomRef.child('round').update(updates).catch(err=>{
     _mpFinalizedRound=null;   // let the timer / next snapshot retry the lock
