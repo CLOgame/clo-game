@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-07a';
+  window.CLO_BUILD = '2026-11-07b';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -10020,8 +10020,15 @@ function mpResetTableLatches(){
   window._mpForceKey=null;
   if(_mpShooterTimerId){clearInterval(_mpShooterTimerId);_mpShooterTimerId=null;}
   _mpShooterTimerKey=null;
-  // Per-round stats gates live on window as 'mp-counted-<round>'.
-  Object.keys(window).filter(k=>k.indexOf('mp-counted-')===0).forEach(k=>{try{delete window[k];}catch(_){}});
+  // Per-round gates live on window: 'mp-counted-<round>' (player stats),
+  // 'mp-host-counted-<round>' (host stats, 11-07a) and
+  // 'mp-forfeit-said-<round>:<uid>' (11-07b). The host one was missed in
+  // 11-07a — this filter only matched the first prefix, so a second table's
+  // host stats adoption was skipped for every round number the first table
+  // had reached (the server had still written them; the phone caught up at
+  // the next boot).
+  Object.keys(window).filter(k=>k.indexOf('mp-counted-')===0||k.indexOf('mp-host-counted-')===0||k.indexOf('mp-forfeit-said-')===0)
+    .forEach(k=>{try{delete window[k];}catch(_){}});
 }
 
 // Called by prStartGame() when the host starts the game.
@@ -10449,6 +10456,7 @@ function mpRenderSeats(room){
   for(let i=0;i<PR_MAX_SEATS;i++){
     const s=seats[i];
     if(!s||!s.uid)continue;
+    if(s.username)_mpNameCache[s.uid]=s.username;   // 11-07b: see mpNameFor
     const pill=document.createElement('div');
     pill.className='mp-seat-pill'+(s.uid===_mpMyUid?' is-you':'')+
       (s.uid===activeUid?' is-active-shooter':'');
@@ -10705,7 +10713,20 @@ function mpHostWatchdogTick(){
   if((r.phase==='bank-result'||r.phase==='player-rolls')&&mpSettlementReady(r).ok){
     let decidedAt=0;
     if(r.phase==='bank-result')decidedAt=r.bankRolledAt||0;
-    else{const bets=r.bets||{};for(const u in bets){const b=bets[u];if(mpIsSettleableBet(b)&&b.rolledAt>decidedAt)decidedAt=b.rolledAt;}}
+    else{
+      // 11-07b: a forfeit decides a hand too, and the server stamps it
+      // forfeitedAt, not rolledAt. Counting only throws made the "deciding
+      // moment" the previous shooter's roll — so when the LAST shooter left
+      // more than 8s after it, this fired at once, ahead of the host's normal
+      // 3.4s pip-reading hold (Nov 7: both forfeit rounds settled by the
+      // watchdog instead of the queue). Money was never affected.
+      const bets=r.bets||{};
+      for(const u in bets){
+        const b=bets[u]; if(!b)continue;
+        if(mpIsSettleableBet(b)&&b.rolledAt>decidedAt)decidedAt=b.rolledAt;
+        if(b.status==='forfeit'&&b.forfeitedAt>decidedAt)decidedAt=b.forfeitedAt;
+      }
+    }
     if(decidedAt&&now>decidedAt+8000&&Date.now()-_mpSettleAskedAt>8000){
       _mpWatchLastAct=now;
       console.warn('[mp watchdog] round decided but not settled \u2014 asking the server again');
@@ -11419,6 +11440,13 @@ function mpRenderPlayerRollsPhase(room,round){
   }else{
     const lastResult=mpGetLastShooterResult(round);
     mpRenderShooterArea(round,lastResult);
+    // 11-07b: say that the shooter left. Their entry is a forfeit now, which
+    // the stage no longer throws (it used to roll 1-1-1 as "FORFEIT — LOSE"),
+    // so this line is the only word of it. Once per hand per leaver.
+    if(currentBet&&currentBet.status==='forfeit'){
+      const fkey='mp-forfeit-said-'+(round.number||0)+':'+currentUid;
+      if(!window[fkey]){ window[fkey]=true; mpSetLog(`${mpNameFor(room,currentUid)} forfeited`); }
+    }
   }
 
   if(currentUid===_mpMyUid){
@@ -11634,6 +11662,16 @@ function mpFindSeatByUid(room,uid){
   for(const k in seats){if(seats[k]&&seats[k].uid===uid)return seats[k];}
   return null;
 }
+// 11-07b: a name that survives the seat. A forfeit frees the chair in the same
+// server write that resolves the hand, so by the time any screen renders it
+// the seat is gone and the leaver read as "Player". Names are remembered as
+// seats are drawn (mpRenderSeats) and looked up here when the seat is not.
+const _mpNameCache={};
+function mpNameFor(room,uid){
+  const seat=room?mpFindSeatByUid(room,uid):null;
+  if(seat&&seat.username)return seat.username;
+  return _mpNameCache[uid]||'Player';
+}
 function mpGetLastShooterResult(round){
   const queue=round.shooterQueue||[];
   const idx=round.currentShooterIdx||0;
@@ -11641,7 +11679,11 @@ function mpGetLastShooterResult(round){
   for(let i=idx;i>=0;i--){
     const uid=queue[i];
     const b=(round.bets||{})[uid];
-    if(b&&b.dice)return {uid:uid,...b};
+    // 11-07b: a forfeit is stored as a resolved loss with placeholder dice
+    // (1-1-1, "Forfeit") so the host's queue can step past the leaver. It is
+    // not a throw: showing it put "PLAYER: FORFEIT — LOSE" and a trips throw
+    // over the real last shooter's result on every screen (Nov 7).
+    if(b&&b.dice&&b.status!=='forfeit')return {uid:uid,...b};
   }
   return null;
 }
@@ -11693,8 +11735,7 @@ function mpRenderShooterArea(round,state){
     // following reveal re-throw the same dice on each pass — the perpetual
     // tumble. The key now carries round+uid, so the next real throw differs
     // on its own and no reset is needed.
-    const seat=mpFindSeatByUid(_mpRoom,state.uid);
-    const nm=seat?(seat.username||'Player'):'Player';
+    const nm=mpNameFor(_mpRoom,state.uid);   // 11-07b
     mpSetLog(`${nm} rolling…`);
     if(label){label.textContent='';label.className='mp-shooter-label';}
     return;
@@ -11706,11 +11747,16 @@ function mpRenderShooterArea(round,state){
     if(label){label.textContent='';label.className='mp-shooter-label';}
     return;
   }
+  // 11-07b: never throw a forfeit's placeholder dice (see
+  // mpGetLastShooterResult). Belt and braces — the callers skip these now.
+  if(state.status==='forfeit'){
+    mpSetLog(`${mpNameFor(_mpRoom,state.uid)} forfeited`);
+    return;
+  }
   // Sub-step B: physics throw across the felt (right→left, player skin).
   // The result text goes to the LOG STRIP below the board (felt stays clean:
   // BANK + POINT + dice only). Revealed on settle so it follows the dice landing.
-  const seat=mpFindSeatByUid(_mpRoom,state.uid);
-  const nm=seat?(seat.username||'Player'):'Player';
+  const nm=mpNameFor(_mpRoom,state.uid);   // 11-07b
   const isMe=(state.uid===_mpMyUid);
   const throwKey=(_mpRoom&&_mpRoom.round&&_mpRoom.round.number)+':'+state.uid;
   mpThrowShooterDice(state.dice,0.7,()=>{
@@ -12010,6 +12056,14 @@ function mpRenderSettlementPhase(room,round){
       if(bd>0)mpSetMsg(`Bank +$${bd.toLocaleString()}`);
       else if(bd<0)mpSetMsg(`Bank -$${(-bd).toLocaleString()}`);
       else mpSetMsg('Bank breaks even');
+      // 11-07b: the host's result sound on a POINT round. Instant bank
+      // results (Headcrack / C-LO / bust) already play at 'bank-result' for
+      // everyone; but when the shooters decided the hand, each phone played
+      // its own cue and the host got the text alone — every point round was
+      // silent at the bank. Keyed per round, point rounds only, so it never
+      // stacks on the instant-result sound.
+      if(round.bankResultType==='point')
+        mpPlayResultSound('settle:'+(round.number||0)+':host',bd>0?'win':(bd<0?'lose':'push'));
       // PERSIST THE HOST'S RESULT. This branch used to set a message and
       // nothing else — the host's wins and losses lived only in room.bankroll
       // and evaporated when the table closed. Now that the bankroll is seeded
@@ -12245,6 +12299,14 @@ function mpSyncLocalBalanceFromRoom(room){
     // and the last writer won.
     if(_profile){
       _profile.balance=balance;
+      // 11-07b: the room's stamp IS this figure's time — keep it. Without
+      // this, saveLocalProfile → _stampBal re-stamped the cache "now", which
+      // let a value the SDK had shown optimistically for a write the server
+      // then REFUSED outrank the rollback (Nov 7 cheat test: 999,999,999 sat
+      // on the host's screen, every real snapshot refused as "stale", until
+      // the next settlement carried a newer stamp). Only the cheater's own
+      // screen was ever wrong; the server never held anything but the truth.
+      if(typeof snapAt==='number'){ _balStampVal=balance; _profile.balAt=_balAt; }
       if(typeof saveLocalProfile==='function')saveLocalProfile(_profile);
       if(window._updateProfile)window._updateProfile({balance}).catch(()=>{});
     }
@@ -17740,7 +17802,10 @@ function soundShakeRattle(){try{const ctx=getACtx();const now=ctx.currentTime;co
 function soundChip(){tone(820,'sine',.18,.055);}
 function soundWin(){const ctx=getACtx(),n=ctx.currentTime;[523,659,784,1047,1319].forEach((f,i)=>tone(f,'sine',.2,.24,n+i*.09));}
 function soundLose(){const ctx=getACtx(),n=ctx.currentTime;[392,330,262,196].forEach((f,i)=>tone(f,'sawtooth',.11,.28,n+i*.12));}
-function soundPush(){const ctx=getACtx(),n=ctx.currentTime;tone(440,'sine',.14,.12,n);tone(440,'sine',.14,.12,n+.17);}
+// 11-07b: was two 0.12s sine blips at gain .14 — half the level of win/lose
+// and over before the dice stopped clattering, so a push read as silence.
+// Same neutral two-note shape, fuller wave, win's level, long enough to hear.
+function soundPush(){const ctx=getACtx(),n=ctx.currentTime;tone(392,'triangle',.22,.2,n);tone(392,'triangle',.22,.2,n+.24);}
 function soundPoint(){const ctx=getACtx(),n=ctx.currentTime;tone(660,'sine',.18,.32,n);tone(880,'sine',.09,.22,n+.05);}
 
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&_actx&&_actx.state==='suspended')_actx.resume();});
