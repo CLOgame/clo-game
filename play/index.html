@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-07c';
+  window.CLO_BUILD = '2026-11-08a';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -11047,11 +11047,9 @@ function mpHideBetPanel(){
 // The bank's money on the table this hand: the stake, but never more than the
 // purse behind it. Rooms made before 14a have no stake → whole purse (old
 // behaviour).
-function mpBankCap(room){
-  const br=(room&&room.bankroll)||0;
-  const st=(room&&typeof room.stake==='number'&&room.stake>0)?room.stake:br;
-  return Math.max(0,Math.min(st,br));
-}
+// mpBankCap(room) moved into the shared rulebook block (Stage 3-lite, Nov 8
+// 2026) — the server needs the same cap to clamp payouts. Same name, same
+// result; it is simply defined further down now.
 // What is still OPEN for a bet, ignoring excludeUid's own bet (so a shooter's
 // ceiling is open-excluding-me, and raising their own bet is not blocked by
 // the chips they already have down).
@@ -14792,9 +14790,83 @@ function mpCompareToBankPoint(roll,round){
 function mpIsSettleableBet(b){
   return !!(b&&b.status==='bet'&&typeof b.amount==='number'&&b.amount>0);
 }
+// ── Stage 3-lite (Nov 8 2026): the server's own view of the bets ─────────
+// The host's lock (mpHostFinalizeBetting) trims every bet to its seat and to
+// the bank and writes the result into round/bets — but a bet entry stays
+// client-writable for the whole hand, so what settlement finds there cannot
+// be trusted: an amount above the seat, an entry re-written after the lock,
+// a bet placed after the bank had already busted. Two defences, both run by
+// the server:
+//   1. round.locked — rollDice op 'bank' snapshots {uid: amount} of the live
+//      bets at the FIRST bank throw of the round, inside the transaction that
+//      writes the dice. Money is committed the moment the dice leave the cup;
+//      a bet entry that changes after that changes nothing. Server-only in
+//      the rules.
+//   2. mpEffectiveBets — the snapshot is clamped to what can actually be
+//      paid: each bet to its seat's chips (a seat with no balance field uses
+//      the profile figure the server passes in as `cover`), then in priority
+//      order — the stopper first, then seat order, then seatless bettors — to
+//      the bank's cap. Nothing is paid that the seat or the bank cannot cover.
+// Without a snapshot (a round the OLD function started) the entry's amount
+// is used, as before.
+function mpBankCap(room){
+  const br=(room&&room.bankroll)||0;
+  const st=(room&&typeof room.stake==='number'&&room.stake>0)?room.stake:br;
+  return Math.max(0,Math.min(st,br));
+}
+// {uid: amount} of the live bets right now — what the server freezes at the
+// first bank throw.
+function mpSnapshotBets(round){
+  const bets=(round&&round.bets)||{};
+  const out={};
+  for(const uid in bets){ const b=bets[uid]; if(mpIsSettleableBet(b))out[uid]=Math.floor(b.amount); }
+  return out;
+}
+// The committed amount of one bet: the snapshot's figure when there is one
+// (0 for a bet the snapshot never saw), else the entry's own amount.
+function mpLockedAmount(round,uid){
+  const b=(round&&round.bets||{})[uid];
+  if(!mpIsSettleableBet(b))return 0;
+  const L=round&&round.locked;
+  if(L&&typeof L==='object')return (typeof L[uid]==='number'&&L[uid]>0)?Math.floor(L[uid]):0;
+  return Math.floor(b.amount);
+}
+// Seat keys in table order ('0','1','2' — numeric when they are numbers).
+function mpSeatOrder(seats){
+  return Object.keys(seats||{}).filter(k=>seats[k]&&seats[k].uid)
+    .sort((a,b)=>{const x=Number(a),y=Number(b);return(isFinite(x)&&isFinite(y))?x-y:String(a).localeCompare(String(b));});
+}
+// What each live bet is worth at settlement: {eff:{uid:amount}, cap}.
+// cover: optional {uid: chips} for bettors whose seat has no numeric balance
+// (or no seat at all) — the server passes their profile balance.
+function mpEffectiveBets(room,cover){
+  const round=(room&&room.round)||{};
+  const bets=round.bets||{};
+  const seats=(room&&room.seats)||{};
+  const cap=mpBankCap(room);
+  const chipsOf=uid=>{
+    for(const k in seats){ const s=seats[k]; if(s&&s.uid===uid)return (typeof s.balance==='number')?Math.max(0,s.balance):(cover&&typeof cover[uid]==='number'?Math.max(0,cover[uid]):0); }
+    return (cover&&typeof cover[uid]==='number')?Math.max(0,cover[uid]):0;
+  };
+  const eff={};
+  let remaining=cap;
+  const take=uid=>{
+    if(eff[uid]!==undefined)return;
+    const want=mpLockedAmount(round,uid);
+    if(want<=0){ if(mpIsSettleableBet(bets[uid]))eff[uid]=0; return; }
+    const a=Math.max(0,Math.min(want,chipsOf(uid),remaining));
+    eff[uid]=a; remaining-=a;
+  };
+  if(round.stoppedBy&&bets[round.stoppedBy])take(String(round.stoppedBy));   // the stop is a trump at the lock; it stays one here
+  for(const k of mpSeatOrder(seats))take(seats[k].uid);
+  for(const uid in bets)take(uid);                                            // seatless bettors last, on their cover
+  return {eff:eff,cap:cap};
+}
 // Can this round be settled right now? Returns {ok:true, mode} or
 // {ok:false, reason}. mode is 'bank' (the bank's own throw decided it) or
-// 'shooters' (every shooter threw against the bank's point).
+// 'shooters' (every shooter threw against the bank's point). Only shooters
+// the host actually queued are waited for — a bet entry that appeared after
+// the queue was built never gets a turn, so it must not hold the hand.
 function mpSettlementReady(round){
   if(!round)return {ok:false,reason:'no round'};
   const bets=round.bets||{};
@@ -14803,9 +14875,12 @@ function mpSettlementReady(round){
     return {ok:false,reason:'bank has not decided ('+round.bankResultType+')'};
   }
   if(round.phase==='player-rolls'){
+    const q=Array.isArray(round.shooterQueue)?round.shooterQueue:null;
     for(const uid in bets){
       const b=bets[uid];
-      if(mpIsSettleableBet(b)&&!b.resultType)return {ok:false,reason:'unrolled shooter '+uid};
+      if(!mpIsSettleableBet(b)||b.resultType)continue;
+      if(q&&q.indexOf(uid)<0)continue;                 // never queued — not a shooter this hand
+      return {ok:false,reason:'unrolled shooter '+uid};
     }
     return {ok:true,mode:'shooters'};
   }
@@ -14816,7 +14891,10 @@ function mpSettlementReady(round){
 // (mpHostSettleBankWin / BankLose / BeginSettlement) so the server settles
 // with the same arithmetic the page always used. `hand` is coalesced to
 // null — RTDB rejects undefined anywhere in a write.
-function mpComputeSettlement(round){
+// eff: the {uid: amount} from mpEffectiveBets. Without it the committed
+// (snapshot) amount is used. A bet worth 0 is not a bet; a shooter-mode bet
+// with no result (never queued) is not a bet either.
+function mpComputeSettlement(round,eff){
   const ready=mpSettlementReady(round);
   if(!ready.ok)return null;
   const bets=round.bets||{};
@@ -14825,12 +14903,15 @@ function mpComputeSettlement(round){
   for(const uid in bets){
     const b=bets[uid];
     if(!mpIsSettleableBet(b))continue;
+    const amt=(eff&&typeof eff[uid]==='number')?eff[uid]:mpLockedAmount(round,uid);
+    if(!(amt>0))continue;
+    if(ready.mode==='shooters'&&!b.resultType)continue;
     const hand=(b.hand===undefined)?null:b.hand;
     let r;
     if(ready.mode==='bank')r=(round.bankResultType==='lose')?'win':'lose';   // bank bust pays everyone, bank instant win takes everyone
     else r=(b.resultType==='win')?'win':(b.resultType==='lose')?'lose':'push';
-    if(r==='win'){summary[uid]={delta:+b.amount,reason:'win',hand:hand};bankDelta-=b.amount;}
-    else if(r==='lose'){summary[uid]={delta:-b.amount,reason:'lose',hand:hand};bankDelta+=b.amount;}
+    if(r==='win'){summary[uid]={delta:+amt,reason:'win',hand:hand};bankDelta-=amt;}
+    else if(r==='lose'){summary[uid]={delta:-amt,reason:'lose',hand:hand};bankDelta+=amt;}
     else summary[uid]={delta:0,reason:'push',hand:hand};
   }
   return {summary:summary,bankDelta:bankDelta,mode:ready.mode};
