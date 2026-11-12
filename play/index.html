@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-08c';
+  window.CLO_BUILD = '2026-11-11a';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -10224,6 +10224,9 @@ const MP_SHOOTER_TIMER_MS=20000; // 20s per shooter to roll
 const MP_BANK_TIMER_MS=15000;    // 11-08b: the bank's clock to throw once bets are locked (see mpStartBankTimer)
 const MP_SETTLE_GRACE_MS=8000;   // 11-08c: a decided hand the bank hasn't settled in 8s is settled by the table (mpSettleClockTick)
 const MP_HOST_GONE_MS=90000;     // 11-08c: host heartbeat silent this long → "The bank left the table" (host beats every 15s)
+const MP_TURN_GRACE_MS=6000;     // 11-11a: a host transition (open player-rolls / advance the queue) overdue this long past the host's own hold is done by the table
+const MP_HOST_HOLD_MS=3600;      // 11-11a: the host's pip-reading hold before it acts (3.4s advance / 3.6s open)
+const MP_FORCE_TABLE_MS=7000;    // 11-11a: a shooter this long past the clock with no throw is force-rolled by the table (host does it at 4.5s)
 
 // Host only: create a fresh round object on Firebase
 function mpInitRound(num){
@@ -10836,14 +10839,43 @@ function mpSettleClockTick(){
     return;
   }
   const decidedAt=mpDecidedAt(r);
-  if(!decidedAt)return;
-  if(mpNow()<decidedAt+MP_SETTLE_GRACE_MS)return;
-  if(Date.now()-_mpSettleAskedAt<8000)return;
-  _mpSettleAskedAt=Date.now();
-  console.warn('[settle] hand decided '+Math.round((mpNow()-decidedAt)/1000)+'s ago and the bank has not settled — asking the server');
-  _mpServerRoll({op:'settle'})
-    .then(res=>console.log('[settle] server (asked by the table): bank',res&&res.bankDelta,'·',res&&res.players,'players'))
-    .catch(err=>console.log('[settle] table ask:',(err&&err.code)||err));   // already-exists = someone else got there; fine
+  if(decidedAt){
+    if(mpNow()<decidedAt+MP_SETTLE_GRACE_MS)return;
+    if(Date.now()-_mpSettleAskedAt<8000)return;
+    _mpSettleAskedAt=Date.now();
+    console.warn('[settle] hand decided '+Math.round((mpNow()-decidedAt)/1000)+'s ago and the bank has not settled — asking the server');
+    _mpServerRoll({op:'settle'})
+      .then(res=>console.log('[settle] server (asked by the table): bank',res&&res.bankDelta,'·',res&&res.players,'players'))
+      .catch(err=>console.log('[settle] table ask:',(err&&err.code)||err));   // already-exists = someone else got there; fine
+    return;
+  }
+  // 11-11a: THE TURN CLOCK. A point hand needs the host's phone three more
+  // times — open player-rolls, advance the queue after each shooter, force a
+  // shooter who never throws. Same pattern as the throw and the settle: the
+  // host acts at its usual hold; once a step is overdue by the table's grace
+  // any seated phone asks the server (op 'turn' / op 'force'), which allows
+  // a non-host only past that grace on ITS clock. Nov 8: a forced point hand
+  // sat undecided until the 90s exit because none of this existed.
+  const due=mpTurnDue(r);
+  if(!due)return;
+  const now=mpNow();
+  if(due.kind==='force'){
+    if(now<due.at+MP_FORCE_TABLE_MS)return;
+    if(Date.now()-(window._mpTableForceAt||0)<6000)return;
+    window._mpTableForceAt=Date.now();
+    console.warn('[dice] shooter '+String(due.uid).slice(0,6)+' is '+Math.round((now-due.at)/1000)+'s past the clock and the host has not force-rolled — asking the server');
+    _mpServerRoll({op:'force',uid:due.uid})
+      .then(res=>console.log('[dice] server force-roll (asked by the table)',res&&res.dice,res&&res.resultType))
+      .catch(err=>console.log('[dice] table force:',(err&&err.code)||err));
+    return;
+  }
+  if(now<due.at+MP_HOST_HOLD_MS+MP_TURN_GRACE_MS)return;
+  if(Date.now()-(window._mpTurnAskedAt||0)<6000)return;
+  window._mpTurnAskedAt=Date.now();
+  console.warn('[mp] '+(due.kind==='open'?'player-rolls not opened':'shooter queue not advanced')+' '+Math.round((now-due.at)/1000)+'s after the throw and the host has not acted — asking the server');
+  _mpServerRoll({op:'turn'})
+    .then(res=>console.log('[mp] server turn (asked by the table):',res&&res.did,res&&res.idx!==undefined?('idx '+res.idx):''))
+    .catch(err=>console.log('[mp] table turn:',(err&&err.code)||err));   // failed-precondition 'nothing due' = the host got there; fine
 }
 function mpStopHostWatchdog(){
   if(_mpHostWatchId){clearInterval(_mpHostWatchId);_mpHostWatchId=null;}
@@ -11515,17 +11547,14 @@ function mpHostStartPlayerRolls(){
   if(!_mpIsHost||!_mpRoomRef||!_mpRoom)return;
   const round=_mpRoom.round;
   if(!round||round.phase!=='bank-result'||round.bankResultType!=='point')return;
-  const bets=round.bets||{};
-  const seats=_mpRoom.seats||{};
-  // Build queue in seat order, only including players with money down. A
-  // 'pass' that still carries money is repaired to a bet (see mpIsLiveBet).
-  const queue=[];
+  // 11-11a: the queue comes from the rulebook (mpShooterQueue) — the same
+  // function the server uses when the table opens player-rolls for a dead
+  // host (op 'turn'), so both build it identically. A 'pass' with money on
+  // it is repaired to a bet here as before.
+  const built=mpShooterQueue(_mpRoom);
+  const queue=built.queue;
   const repairs={};
-  for(let i=0;i<PR_MAX_SEATS;i++){
-    const s=seats[i];
-    if(!s||!s.uid)continue;
-    if(mpIsLiveBet(s.uid,bets[s.uid],repairs))queue.push(s.uid);
-  }
+  for(const u in built.repairs){ console.warn('[mp] pass with money on it, restoring as a bet',u); repairs['bets/'+u+'/status']='bet'; }
   if(queue.length===0){
     // Everyone passed — bank wins by default (no settlements needed, push round)
     mpHostFinalizeRoundNoBets();
@@ -15027,6 +15056,50 @@ function mpSettlementReady(round){
     return {ok:true,mode:'shooters'};
   }
   return {ok:false,reason:'phase '+round.phase};
+}
+// 11-11a: THE SHOOTER QUEUE, built the one way. Seats in table order whose
+// player has money down. A 'pass' that still carries money is a bet (the
+// Oct 11 pass-with-amount lesson) — it is listed, and named in `repairs` so
+// the caller can write its status back to 'bet'. The host's phone and the
+// server (op 'turn') both build the queue from this, so they cannot disagree.
+function mpShooterQueue(room){
+  const round=(room&&room.round)||{}, bets=round.bets||{}, seats=(room&&room.seats)||{};
+  const queue=[], repairs={};
+  for(const k of mpSeatOrder(seats)){
+    const uid=seats[k].uid, b=bets[uid];
+    if(!b||!(b.amount>0))continue;
+    if(b.status==='bet'){queue.push(uid);continue;}
+    if(b.status==='pass'){queue.push(uid);repairs[uid]='bet';}
+  }
+  return {queue:queue,repairs:repairs};
+}
+// 11-11a: which host-only transition is DUE in a hand, and since when:
+//   {kind:'open',    at:bankRolledAt}  bank set a point, player-rolls not opened
+//   {kind:'advance', at:<stamp>, idx}  current shooter resolved (throw or
+//                                      forfeit), another shooter waits
+//   {kind:'force',   at:shooterDeadline, uid}  current shooter has not thrown
+//                                      and the clock has run out
+//   null                               nothing for the host to do
+// The host's phone acts on these at its usual 3.4–3.6s hold (open/advance)
+// or 4.5s past the deadline (force); a seated player may ask the server once
+// they are overdue by the table's grace. Pure: callers add the clocks.
+function mpTurnDue(round){
+  if(!round)return null;
+  if(round.phase==='bank-result'&&round.bankResultType==='point'&&typeof round.bankRolledAt==='number')
+    return {kind:'open',at:round.bankRolledAt};
+  if(round.phase!=='player-rolls')return null;
+  const q=Array.isArray(round.shooterQueue)?round.shooterQueue:[];
+  const idx=round.currentShooterIdx||0;
+  const cur=q[idx]; if(!cur)return null;
+  const b=(round.bets||{})[cur]||null;
+  const resolved=!!(b&&((b.dice&&b.resultType)||b.status==='forfeit'));
+  if(resolved){
+    if(idx+1>=q.length)return null;                       // last shooter — settlement's job
+    const at=(b.status==='forfeit'&&typeof b.forfeitedAt==='number')?b.forfeitedAt:(typeof b.rolledAt==='number'?b.rolledAt:0);
+    return {kind:'advance',at:at,idx:idx};
+  }
+  if(typeof round.shooterDeadline==='number')return {kind:'force',at:round.shooterDeadline,uid:cur};
+  return null;
 }
 // 11-08c: WHEN was this hand decided — the bank's deciding throw, or the
 // last shooter throw / forfeit; 0 when it is not decided (or carries no
