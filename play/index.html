@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-11c';
+  window.CLO_BUILD = '2026-11-11d';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -7942,6 +7942,16 @@ function goToAvatar(){showScreen('avatar');buildAvatarGrid();}
 // which checks the real _uid. Without this, a guest has no Firebase session
 // and cannot host or join private tables.
 function playAsGuest(){
+  // 11-11d: the landing can flash for a second on a slow cold start (the
+  // 2.5s splash timer fires before Auth reports). A returning player who taps
+  // this in that window must land in THEIR lobby — the create screen's
+  // "Enter The Game" mints a fresh 10K profile and merge-writes it over the
+  // cloud doc under the same uid (the Nov 1 wipe mechanism, still open on
+  // this side until now). Boot already chose a screen → lobby. A local
+  // cache for this uid → boot from it. Neither → the create screen, where
+  // createProfile() makes one more check against the cloud before minting.
+  if(_bootNavigated&&_profile&&_profile.username){ goToLobby(); return; }
+  if(bootFromCache('guest-tap'))return;
   // If already signed in (auth finished in the background), just continue.
   if(_uid){goToAvatar();return;}
   if(!_auth){
@@ -13357,6 +13367,15 @@ async function declineTOS(){
   showScreen('landing');
 }
 
+// 11-11d: does Firestore already hold a profile for this uid? Null when
+// signed out, offline (4s cap — Firestore takes ~10s to give up offline),
+// missing, or nameless.
+function _existingCloudProfile(){
+  if(!_uid||!_db)return Promise.resolve(null);
+  const get=_db.collection('players').doc(_uid).get().then(s=>{ const d=s.exists?s.data():null; return (d&&d.username)?d:null; }).catch(()=>null);
+  const cap=new Promise(res=>setTimeout(()=>res(null),4000));
+  return Promise.race([get,cap]);
+}
 async function createProfile(){
   const inp=document.getElementById('username-input');
   const err=document.getElementById('username-error');
@@ -13367,6 +13386,28 @@ async function createProfile(){
   if(name.length>16){err.textContent='Max 16 characters';return;}
   if(!/^[a-zA-Z0-9_\- ]+$/.test(name)){err.textContent='Letters, numbers, spaces only';return;}
   btn.disabled=true;btn.textContent='Saving...';
+  // 11-11d: LAST GATE before minting. If this uid already has a profile —
+  // loaded by the boot path while the player was on this screen, or sitting
+  // in Firestore (storage wiped, auth survived) — adopt it; never overwrite.
+  if(_bootNavigated&&_profile&&_profile.username){
+    btn.disabled=false;btn.textContent='Enter The Game';
+    showToast('Welcome back, '+_profile.username+'!');
+    goToLobby();
+    return;
+  }
+  const existing=await _existingCloudProfile();
+  if(existing){
+    _profile=ensureAvatarFields(existing);
+    _balAt=(typeof existing.balAt==='number')?existing.balAt:0; _balStampVal=_profile.balance;
+    setBalance((typeof _profile.balance==='number')?_profile.balance:10000,'boot:cloud-create',_balAt);
+    saveLocalProfile(_profile);
+    _bootNavigated=true;
+    btn.disabled=false;btn.textContent='Enter The Game';
+    console.log('[bal] createProfile: existing cloud profile adopted instead of minting —',existing.username);
+    showToast('Welcome back, '+existing.username+'!');
+    try{ if(needsTOS())showTOS(()=>goToLobby()); else goToLobby(); }catch(_){ goToLobby(); }
+    return;
+  }
   // Build the initial profile. avatarId is the new canonical reference —
   // avatarEmoji/avatarColor are kept for legacy renders that haven't been
   // upgraded to look up via avatarId. ownedAvatars seeded with all 12 free
