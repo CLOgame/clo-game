@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-11b';
+  window.CLO_BUILD = '2026-11-11c';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -7022,6 +7022,15 @@ async function _doClaimReferralCredit(){
     const code=(_mpRoom&&_mpRoom.code)||_prRoomCode||'';
     const res=await firebase.functions().httpsCallable('rollDice')({op:'claim',code:String(code||'')});
     const claimed=res&&res.data;
+    // 11-11c: the server now backfills a missing createdAt (rollDice v11) and
+    // returns it either way. Mirror it into the profile + cache when the
+    // profile has none, so the next boot's cache-vs-cloud check can match.
+    // Not pushed to Firestore from here — the server already holds it.
+    if(claimed&&typeof claimed.createdAt==='number'&&_profile&&_profile.createdAt==null){
+      _profile.createdAt=new Date(claimed.createdAt).toISOString();
+      saveLocalProfile(_profile);
+      console.log('[bal] createdAt '+(claimed.createdAtBackfilled?'backfilled by the server':'adopted from the server')+': '+_profile.createdAt);
+    }
     if(claimed&&(claimed.owed>0||claimed.bought>0)){
       _profile.balance=claimed.newBal;
       _profile.pendingReferralCredit=0;
@@ -7382,7 +7391,14 @@ window.addEventListener('load',()=>{
               // local profile is newer by definition and must never heal the
               // cloud down to 10K.
               const _ck=v=>{ if(v==null)return null; if(typeof v.toMillis==='function')return String(Math.floor(v.toMillis()/1000)); if(typeof v==='object'&&typeof v.seconds==='number')return String(v.seconds); if(typeof v==='string'){ const t=Date.parse(v); return isNaN(t)?v:String(Math.floor(t/1000)); } return String(v); };
-              const sameProfile=!!(cached&&_profile&&_ck(cached.createdAt)!==null&&_ck(cached.createdAt)===_ck(_profile.createdAt));
+              // 11-11c: a profile saved before rollDice v11 may have NO createdAt
+              // on either side. The cache is then a mirror of the cloud doc, not a
+              // fresh mint (a brand-new local profile always carries one), so
+              // "both absent, same uid" is the same profile. The claim that runs
+              // right after this boot backfills it; from then on they compare.
+              const sameProfile=!!(cached&&_profile&&(
+                (_ck(cached.createdAt)!==null&&_ck(cached.createdAt)===_ck(_profile.createdAt))||
+                (cached.createdAt==null&&_profile.createdAt==null)));
               const cb=cached&&cached.uid===_uid&&sameProfile&&typeof cached.balance==='number'?cached:null;
               const cloudAt=_bootCloudAt;
               if(cached&&cached.uid===_uid&&!sameProfile)console.warn('[bal] boot: local cache is a different profile (createdAt mismatch) \u2014 cloud wins');
