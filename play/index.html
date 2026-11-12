@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-11a';
+  window.CLO_BUILD = '2026-11-11b';
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
     // 29a: the who's-online panel is opened from the table waiting room as
@@ -10824,11 +10824,21 @@ function mpSettleClockTick(){
   // Host heartbeat. Date.now() on both sides (prWriteHeartbeat stamps the
   // host's clock); 90s swallows any skew that matters.
   const seen=(typeof room.lastSeen==='number')?room.lastSeen:0;
-  const silent=seen?Date.now()-seen:0;
-  if(seen&&silent>MP_HOST_GONE_MS){
+  // 11-11b: the exit never interrupts a hand in progress — the bank, turn
+  // and settle clocks carry pre-roll → settlement without the host (Nov 11:
+  // a forced point hand takes ~90s, and the exit, counted from the host's
+  // last heartbeat at the lock, fired right where the settle ask was due;
+  // both phones left, the decided hand went unsettled). It fires only where
+  // the host's phone is the only thing that can move the table: betting, or
+  // after settlement — and after settlement the 90s run from the settlement
+  // itself, so a returning host always has that window.
+  const inHand=!!(r&&(r.phase==='pre-roll'||r.phase==='bank-rolling'||r.phase==='bank-result'||r.phase==='player-rolls'));
+  const ref=(r&&r.phase==='settlement'&&typeof r.settledAt==='number')?Math.max(seen,r.settledAt):seen;
+  const silent=ref?Date.now()-ref:0;
+  if(seen&&!inHand&&silent>MP_HOST_GONE_MS){
     if(_mpHostGoneSaid)return;
     _mpHostGoneSaid=true;
-    console.warn('[mp] host heartbeat silent '+Math.round(silent/1000)+'s — leaving the table');
+    console.warn('[mp] host heartbeat silent '+Math.round((Date.now()-seen)/1000)+'s — leaving the table');
     showToast('The bank left the table');
     setTimeout(()=>mpLeaveTable(false,{hostGone:true}),0);
     return;
