@@ -38,7 +38,7 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-15a';
+  window.CLO_BUILD = '2026-11-15b';
   // 11-15a: App Check (log-only on the server for now). The site key is
   // public by design — it names the reCAPTCHA registration for
   // clochamps.com; the secret lives in the Firebase console only. Empty key
@@ -7242,6 +7242,13 @@ window.addEventListener('load',()=>{
           ? new firebase.appCheck.ReCaptchaEnterpriseProvider(k) : k;
         firebase.appCheck().activate(prov,true);
         console.log('[appcheck] activated ('+(window.APP_CHECK_PROVIDER||'v3')+')');
+        // 11-15b: one early token probe. If Google's reCAPTCHA script is
+        // blocked (ad blocker / privacy extension on a desktop), the server
+        // will refuse every table call — better to know in the console at
+        // boot than at the first roll. The toast itself is shown by
+        // _mpServerRoll when a call is actually refused.
+        setTimeout(()=>{ try{ firebase.appCheck().getToken().then(()=>console.log('[appcheck] token ok'))
+          .catch(e=>{ window._appCheckFail=true; console.warn('[appcheck] token fetch failed — reCAPTCHA blocked?',e&&e.message); }); }catch(_){} },2500);
       }else console.log('[appcheck] not configured');
     }catch(e){ console.warn('[appcheck] activation failed',e); }
     _auth=firebase.auth();_db=firebase.firestore();_rtdb=firebase.database();
@@ -8516,7 +8523,29 @@ function _storeFn(){
 function _mpServerRoll(payload){
   if(!window.firebase||!firebase.functions)return Promise.reject(new Error('functions SDK missing'));
   const code=(_mpRoom&&_mpRoom.code)||_prRoomCode;
-  return firebase.functions().httpsCallable('rollDice')(Object.assign({code:String(code||'')},payload)).then(r=>r&&r.data);
+  return firebase.functions().httpsCallable('rollDice')(Object.assign({code:String(code||'')},payload)).then(r=>r&&r.data)
+    .catch(err=>{ _mpExplainAppCheck(err); throw err; });
+}
+// 11-15b: the server (rollDice v13) refuses any call that did not carry a
+// verified App Check token with failed-precondition 'app check required'.
+// On a phone that never happens; on a desktop it means an ad blocker or
+// privacy extension stopped Google's reCAPTCHA script from loading, so the
+// page could not get a token. Say so in plain words, once a minute at most,
+// and flag the error so the callers skip their generic "tap ROLL again"
+// toast (which would overwrite this one and send the player in circles).
+let _appCheckToastAt=0;
+function _mpExplainAppCheck(err){
+  const code=err&&err.code?String(err.code):'';
+  const msg=err&&err.message?String(err.message):'';
+  if(!/failed-precondition/.test(code)||!/app check/i.test(msg))return false;
+  err.appCheck=true;
+  console.warn('[appcheck] server refused the call — no valid token from this page');
+  const now=Date.now();
+  if(now-_appCheckToastAt>60000){
+    _appCheckToastAt=now;
+    showToast('Security check failed — if you use an ad blocker, allow clochamps.com and reload',8000);
+  }
+  return true;
 }
 // Ask the server to check a token with Google and credit the reward.
 // Returns the function's result object ({ok, already, grant, chips, ...}).
@@ -11822,7 +11851,7 @@ function mpPlayerRoll(opts){
       // 'already-exists' = our result already landed (double tap / retry) — fine.
       if(!/already-exists/.test(code)){
         _mpRoomRef.child('round/bets/'+_mpMyUid+'/shooting').set(false).catch(()=>{});
-        showToast('Roll didn\u2019t go through \u2014 tap ROLL again');
+        if(!err.appCheck)showToast('Roll didn\u2019t go through \u2014 tap ROLL again');   // 11-15b: the App Check toast already said why
       }
     });
 }
@@ -12674,7 +12703,7 @@ function mpHostRollBank(){
       console.error('bank roll failed',c,err&&err.message);
       if(/aborted/.test(c))return;            // another call already resolved it
       _mpRoomRef.child('round/phase').set(wasPhase==='bank-rolling'?'pre-roll':wasPhase).catch(()=>{});
-      showToast('Could not roll \u2014 tap ROLL again');
+      if(!err.appCheck)showToast('Could not roll \u2014 tap ROLL again');   // 11-15b: see _mpExplainAppCheck
     });
 }
 
