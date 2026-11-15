@@ -38,9 +38,18 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-11d';
+  window.CLO_BUILD = '2026-11-15a';
+  // 11-15a: App Check (log-only on the server for now). The site key is
+  // public by design — it names the reCAPTCHA registration for
+  // clochamps.com; the secret lives in the Firebase console only. Empty key
+  // = App Check not activated, page behaves exactly as before.
+  window.APP_CHECK_SITE_KEY = '6LeviiAuAAAAALQwgs2BvEOILpFj2y2Sc--R2N52';
+  window.APP_CHECK_PROVIDER = 'enterprise';   // 'v3' | 'enterprise'
   document.addEventListener('DOMContentLoaded',()=>{
     const t=document.getElementById('build-tag'); if(t)t.textContent='build '+window.CLO_BUILD;
+    // reCAPTCHA's own badge is hidden (CSS below) — Google allows that only
+    // when this notice appears in the page instead.
+    const rc=document.getElementById('recaptcha-note'); if(rc&&window.APP_CHECK_SITE_KEY&&window.APP_CHECK_SITE_KEY.indexOf('__')!==0)rc.style.display='block';
     // 29a: the who's-online panel is opened from the table waiting room as
     // well as the lobby, so it cannot live inside #screen-lobby (inactive
     // screens are display:none). Re-home it on <body>.
@@ -101,6 +110,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-functions-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check-compat.js"></script>
 
 <style>
 /* ── Reset ─────────────────────────────────────────────────────────────── */
@@ -955,6 +965,15 @@ html,body{
   font-family:system-ui,sans-serif;font-size:.6rem;letter-spacing:.06em;
   color:rgba(255,255,255,.35);
 }
+/* 11-15a: reCAPTCHA v3/Enterprise badge hidden; the required notice is
+   #recaptcha-note beside the build tag (shown only when App Check is on). */
+.grecaptcha-badge{visibility:hidden !important;}
+.recaptcha-note{
+  position:absolute;right:8px;bottom:4px;z-index:5;display:none;
+  font-family:system-ui,sans-serif;font-size:.55rem;letter-spacing:.02em;
+  color:rgba(255,255,255,.3);pointer-events:auto;
+}
+.recaptcha-note a{color:rgba(255,255,255,.45);text-decoration:none;}
 #screen-lobby{
   background:radial-gradient(ellipse at 50% 30%,#1a6aaa 0%,#0d4a80 40%,#072d55 100%);
   flex-direction:column;justify-content:flex-start;
@@ -5812,6 +5831,7 @@ html,body{
 <!-- ══════════════════════════════════════ LOBBY ══ -->
 <div class="screen" id="screen-lobby">
   <div class="build-tag" id="build-tag"></div>
+  <div class="recaptcha-note" id="recaptcha-note">Protected by reCAPTCHA · <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Privacy</a> · <a href="https://policies.google.com/terms" target="_blank" rel="noopener">Terms</a></div>
 
   <!-- ── Top Bar ── -->
   <div class="lobby-top">
@@ -7211,6 +7231,19 @@ window.addEventListener('load',()=>{
       appId:"1:630310342960:web:0bd41fd97ac9ff2b0cf8f5",
       databaseURL:"https://clo-beat-the-bank-default-rtdb.firebaseio.com"
     });
+    // 11-15a: App Check — must come right after initializeApp and before any
+    // service is first used, so every Firestore/RTDB/Functions request can
+    // carry a token. Auto-refresh on. Offline or blocked, the SDK fails
+    // quietly and requests go out without a token — nothing enforces yet.
+    try{
+      const k=window.APP_CHECK_SITE_KEY||'';
+      if(k&&k.indexOf('__')!==0&&firebase.appCheck){
+        const prov=(window.APP_CHECK_PROVIDER==='enterprise'&&firebase.appCheck.ReCaptchaEnterpriseProvider)
+          ? new firebase.appCheck.ReCaptchaEnterpriseProvider(k) : k;
+        firebase.appCheck().activate(prov,true);
+        console.log('[appcheck] activated ('+(window.APP_CHECK_PROVIDER||'v3')+')');
+      }else console.log('[appcheck] not configured');
+    }catch(e){ console.warn('[appcheck] activation failed',e); }
     _auth=firebase.auth();_db=firebase.firestore();_rtdb=firebase.database();
     // 18b: every device's offset from Firebase's clock. Deadlines are written
     // and counted down in SERVER time so a phone whose clock is 3s behind the
