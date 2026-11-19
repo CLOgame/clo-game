@@ -38,7 +38,15 @@
   // installed device can sit on an old build indefinitely, and uninstalling
   // the app does NOT clear it (the game lives in Chrome's storage for the
   // origin, not in the TWA shell).
-  window.CLO_BUILD = '2026-11-15b';
+  window.CLO_BUILD = '2026-11-18a';
+  // 11-18a: ADS_LIVE. The game runs inside Chrome (the Play app is a Trusted
+  // Web Activity), so the AdMob SDK cannot be reached from this page; real
+  // rewarded video needs a native bridge + Google's server-side reward
+  // receipt, which lands in the first post-launch update. Until then the
+  // three "Watch Ad" entry points (Rewards Center, Free Roll, bust-out) and
+  // the 2x-XP offer stay hidden rather than granting rewards for no ad.
+  // Flip to true in the build that ships real ads; nothing else changes.
+  window.ADS_LIVE = false;
   // 11-15a: App Check (log-only on the server for now). The site key is
   // public by design — it names the reCAPTCHA registration for
   // clochamps.com; the secret lives in the Firebase console only. Empty key
@@ -8862,7 +8870,7 @@ function goToFreeRoll(){
       setFrNote('Free roll ready — shake it!','ready');
     }else if(stacksOnEntry>=1){
       setFrNote(stacksOnEntry+(stacksOnEntry>1?' free rolls ready':' free roll ready')
-        +' · '+adLeftOnEntry+' ad rolls left today','ready');
+        +(adsLive()?' · '+adLeftOnEntry+' ad rolls left today':''),'ready');   // 11-18a
     }else if(adLeftOnEntry>0){
       setFrNote('No free rolls ready · watch an ad or pay $0.99 · '
         +adLeftOnEntry+' ad rolls left today','warn');
@@ -15823,6 +15831,7 @@ function resetSessionXP(){
 // screen), false if there was nothing to offer.
 function maybeOfferDoubleXP(onDone){
   const earned=_sessionXP||0;
+  if(!adsLive()){ if(onDone)onDone(); return false; }   // 11-18a: no video, no offer
   if(earned<=0||_sessionXPOfferShown){ if(onDone)onDone(); return false; }
   _sessionXPOfferShown=true;
 
@@ -16810,6 +16819,8 @@ function showGameOver(){
     const oc=o.getAttribute('onclick')||'';
     if(oc.indexOf('bustOutWatchAd')>=0){
       const sub=o.querySelector('.go-opt-sub');
+      if(!adsLive()){ o.style.display='none'; return; }   // 11-18a: Free Roll + Shop only
+      o.style.display='';
       if(adReady){
         o.removeAttribute('disabled');
         if(sub)sub.textContent='+$1,000 chips \u00b7 '+adRemaining+' left today';
@@ -16955,6 +16966,8 @@ function isStreakReady(){
 // Watch-Ad reward config — 5 ads per day, 15 minutes between watches,
 // $1K chips per watch. Tracked separately from streak/free-roll so the
 // counters are independent.
+// 11-18a: single switch for every rewarded-video surface (see window.ADS_LIVE).
+function adsLive(){ return window.ADS_LIVE===true; }
 const AD_WATCH_REWARD=1000;
 const AD_WATCH_DAILY_CAP=5;
 const AD_WATCH_COOLDOWN_MS=15*60*1000;  // 15 minutes
@@ -16981,6 +16994,7 @@ function getAdWatchMsToNext(){
 // Compatibility: legacy callers use isAdReady() — now this checks BOTH
 // the daily cap and the per-watch cooldown.
 function isAdReady(){
+  if(!adsLive())return false;   // 11-18a
   if(!_profile)return true;
   if(getAdWatchesRemaining()<=0)return false;
   if(getAdWatchMsToNext()>0)return false;
@@ -17022,9 +17036,11 @@ function getFrAdRollsUsedToday(){
   return Math.min(FR_AD_ROLL_DAILY_CAP,_profile.frAdRollCountToday||0);
 }
 function getFrAdRollsRemaining(){
+  if(!adsLive())return 0;   // 11-18a: every "N ad rolls left" branch falls through to the no-ad copy
   return Math.max(0,FR_AD_ROLL_DAILY_CAP-getFrAdRollsUsedToday());
 }
 function isFrAdRollAvailable(){
+  if(!adsLive())return false;   // 11-18a
   if(!_profile)return true;
   return getFrAdRollsRemaining()>0;
 }
@@ -17063,7 +17079,8 @@ function refreshFrAdRollUI(){
     if(left>0){
       setFrNote(left+' ad rolls left today','ready');
     }else{
-      setFrNote('Out of ad rolls today — pay $0.99 or come back tomorrow','warn');
+      setFrNote(adsLive()?'Out of ad rolls today — pay $0.99 or come back tomorrow'
+        :'Pay $0.99 to roll again or come back tomorrow','warn');   // 11-18a
     }
   }
 }
@@ -17188,6 +17205,8 @@ function renderRewardsCenter(){
   // ── Watch Ad row ──
   // Three states: ready (watches-remaining), on cooldown (live timer),
   // or fully exhausted for today (all 5 used, "back tomorrow").
+  // 11-18a: no row at all while ADS_LIVE is false.
+  if(adsLive()){
   const adRemaining=getAdWatchesRemaining();
   const adCooldownMs=getAdWatchMsToNext();
   const adExhausted=adRemaining<=0;
@@ -17212,6 +17231,7 @@ function renderRewardsCenter(){
     </div>
     ${adCtaHtml}
   </div>`;
+  }
 
   // ── Buy Chips row (always available) ──
   html+=`<div class="rwd-row">
@@ -17269,6 +17289,7 @@ function claimStreakFromRewards(){
   },100);
 }
 function claimAdFromRewards(){
+  if(!adsLive()){ showToast('Ads are coming in a future update'); return; }   // 11-18a
   if(getAdWatchesRemaining()<=0){
     showToast('All ad watches used today \u2014 back tomorrow');
     return;
@@ -17807,6 +17828,7 @@ function bustOutFreeRoll(){
   setTimeout(()=>goToFreeRoll(),100);
 }
 function bustOutWatchAd(){
+  if(!adsLive()){ showToast('Ads are coming in a future update'); return; }   // 11-18a
   // Shares the daily cap (5/day) and cooldown (15 min) with the Rewards
   // Center ad. Players can't double-dip — a bust-out ad uses one of their
   // 5 daily watches. This keeps the economy honest while still giving
@@ -18037,6 +18059,7 @@ function evaluateFrRoll(vals){
 
 // ── Watch a rewarded video ad → free extra roll ────────────────────────
 function watchAdForRoll(){
+  if(!adsLive()){ showToast('Ads are coming in a future update'); refreshFrAdRollUI(); return; }   // 11-18a
   // Placeholder for AdMob/Unity Ads rewarded video integration.
   // Real flow: show rewarded ad → on completion callback → grant the roll.
   // Guard: refuse once the daily ad-roll allowance is spent. Also re-syncs
